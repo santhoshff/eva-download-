@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import stillFilm from "@/assets/still-film.jpg";
+import { BrandMark } from "@/components/BrandMark";
 
 export const Route = createFileRoute("/about")({
   head: () => ({
@@ -24,7 +25,7 @@ function About() {
   return (
     <main className="mx-auto min-h-dvh max-w-[430px] px-5 pb-16 pt-[max(1.25rem,env(safe-area-inset-top))]">
       <header className="flex items-center justify-between">
-        <Link to="/" className="font-display text-[26px] leading-none text-ink">Eva</Link>
+        <Link to="/" aria-label="Eva Download home"><BrandMark compact /></Link>
         <Link to="/" className="eyebrow hover:text-ink">Home</Link>
       </header>
 
