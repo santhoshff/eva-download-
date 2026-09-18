@@ -9,7 +9,7 @@ export interface LibraryItem {
   kind: FormatKind;
   formatLabel: string;
   durationSec: number;
-  sizeBytes?: number;
+  sizeBytes?: number | undefined;
   fileName: string;
   savedAt: number;
   demo: boolean;
