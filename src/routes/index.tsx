@@ -4,6 +4,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
 import { z } from "zod";
 import { DownloadSheet } from "@/components/DownloadSheet";
+import { BrandMark } from "@/components/BrandMark";
 import { getExtractorStatus } from "@/lib/extractor.functions";
 import { readLibrary, removeFromLibrary, subscribeLibrary, type LibraryItem } from "@/lib/library";
 import { PLATFORM_LABEL, extractUrl, formatDuration } from "@/lib/media";
@@ -81,7 +82,7 @@ function Home() {
   return (
     <main className="mx-auto min-h-dvh max-w-[430px] px-5 pb-12 pt-[max(1.25rem,env(safe-area-inset-top))]">
       <header className="flex items-center justify-between">
-        <span className="font-display text-[26px] leading-none text-ink">Eva</span>
+        <BrandMark compact />
         <Link to="/about" className="eyebrow hover:text-ink">About</Link>
       </header>
 
