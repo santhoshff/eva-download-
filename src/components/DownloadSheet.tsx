@@ -14,7 +14,7 @@ import {
 
 type Stage =
   | { kind: "ready" }
-  | { kind: "downloading"; pct: number; received: number; total?: number }
+  | { kind: "downloading"; pct: number; received: number; total?: number | undefined }
   | { kind: "saved"; fileName: string }
   | { kind: "error"; message: string };
 
@@ -276,7 +276,7 @@ export function DownloadSheet({ url, onClose }: Props) {
   );
 }
 
-function MediaHeader({ media, selected }: { media: MediaInfo; selected?: MediaFormat }) {
+function MediaHeader({ media, selected }: { media: MediaInfo; selected?: MediaFormat | undefined }) {
   return (
     <div className="mt-4 flex gap-4">
       <img

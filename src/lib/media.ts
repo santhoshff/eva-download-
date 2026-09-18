@@ -9,7 +9,7 @@ export interface MediaFormat {
   id: string;
   kind: FormatKind;
   label: string; // "1080p" | "320 kbps"
-  sizeBytes?: number;
+  sizeBytes?: number | undefined;
   ext: string;
 }
 
@@ -17,7 +17,7 @@ export interface MediaInfo {
   url: string;
   platform: Platform;
   title: string;
-  author?: string;
+  author?: string | undefined;
   thumbnail: string;
   durationSec: number;
   formats: MediaFormat[];
