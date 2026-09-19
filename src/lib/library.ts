@@ -13,6 +13,7 @@ export interface LibraryItem {
   fileName: string;
   savedAt: number;
   demo: boolean;
+  tags?: string[] | undefined;
 }
 
 const KEY = "eva.library.v1";
@@ -37,6 +38,10 @@ export function addToLibrary(item: Omit<LibraryItem, "id" | "savedAt">): Library
   const full: LibraryItem = { ...item, id: crypto.randomUUID(), savedAt: Date.now() };
   write([full, ...readLibrary()]);
   return full;
+}
+
+export function updateLibraryItem(id: string, patch: Partial<Omit<LibraryItem, "id">>) {
+  write(readLibrary().map((i) => (i.id === id ? { ...i, ...patch } : i)));
 }
 
 export function removeFromLibrary(id: string) {
