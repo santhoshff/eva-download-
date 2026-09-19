@@ -15,7 +15,7 @@ import {
 type Stage =
   | { kind: "ready" }
   | { kind: "downloading"; pct: number; received: number; total?: number | undefined }
-  | { kind: "saved"; fileName: string }
+  | { kind: "saved"; fileName: string; itemId: string }
   | { kind: "error"; message: string };
 
 interface Props {
@@ -86,7 +86,7 @@ export function DownloadSheet({ url, onClose }: Props) {
   }, [onClose, stage.kind]);
 
   const commit = (media: MediaInfo, f: MediaFormat, fileName: string) => {
-    addToLibrary({
+    const item = addToLibrary({
       url: media.url,
       title: media.title,
       thumbnail: media.thumbnail,
@@ -98,7 +98,7 @@ export function DownloadSheet({ url, onClose }: Props) {
       fileName,
       demo: media.demo,
     });
-    setStage({ kind: "saved", fileName });
+    setStage({ kind: "saved", fileName, itemId: item.id });
   };
 
   const startDownload = async () => {
@@ -194,7 +194,12 @@ export function DownloadSheet({ url, onClose }: Props) {
         )}
 
         {info.data && stage.kind === "saved" && (
-          <SavedBody media={info.data} fileName={stage.fileName} onClose={onClose} />
+          <SavedBody
+            media={info.data}
+            fileName={stage.fileName}
+            itemId={stage.itemId}
+            onClose={onClose}
+          />
         )}
 
         {info.data && (stage.kind === "ready" || stage.kind === "downloading") && (
