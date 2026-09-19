@@ -135,6 +135,11 @@ function Home() {
                     <div className="font-mono text-[10px] text-ink/40">
                       {item.kind === "audio" ? "Audio" : "Video"} · {item.formatLabel} · {formatDuration(item.durationSec)} · {PLATFORM_LABEL[item.platform]}
                     </div>
+                    {item.tags && item.tags.length > 0 && (
+                      <div className="mt-1 truncate font-mono text-[10px] text-ink/35">
+                        {item.tags.slice(0, 4).join(" · ")}
+                      </div>
+                    )}
                   </div>
                 </button>
                 <button
