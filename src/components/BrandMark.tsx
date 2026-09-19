@@ -1,4 +1,4 @@
-import evaMark from "@/assets/eva-mark.png.asset.json";
+import evaMark from "@/assets/eva-mark.png";
 
 interface BrandMarkProps {
   compact?: boolean;
@@ -8,7 +8,7 @@ export function BrandMark({ compact = false }: BrandMarkProps) {
   return (
     <span className="inline-flex items-center gap-2.5" aria-label="Eva Download">
       <img
-        src={evaMark.url}
+        src={evaMark}
         alt=""
         width={compact ? 34 : 42}
         height={compact ? 34 : 42}

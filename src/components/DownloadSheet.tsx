@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getMediaInfo } from "@/lib/extractor.functions";
-import { addToLibrary } from "@/lib/library";
+import { suggestName } from "@/lib/naming.functions";
+import { addToLibrary, updateLibraryItem } from "@/lib/library";
 import {
   PLATFORM_LABEL,
   formatBytes,
@@ -15,7 +16,7 @@ import {
 type Stage =
   | { kind: "ready" }
   | { kind: "downloading"; pct: number; received: number; total?: number | undefined }
-  | { kind: "saved"; fileName: string }
+  | { kind: "saved"; fileName: string; itemId: string }
   | { kind: "error"; message: string };
 
 interface Props {
@@ -86,7 +87,7 @@ export function DownloadSheet({ url, onClose }: Props) {
   }, [onClose, stage.kind]);
 
   const commit = (media: MediaInfo, f: MediaFormat, fileName: string) => {
-    addToLibrary({
+    const item = addToLibrary({
       url: media.url,
       title: media.title,
       thumbnail: media.thumbnail,
@@ -98,7 +99,7 @@ export function DownloadSheet({ url, onClose }: Props) {
       fileName,
       demo: media.demo,
     });
-    setStage({ kind: "saved", fileName });
+    setStage({ kind: "saved", fileName, itemId: item.id });
   };
 
   const startDownload = async () => {
@@ -194,7 +195,12 @@ export function DownloadSheet({ url, onClose }: Props) {
         )}
 
         {info.data && stage.kind === "saved" && (
-          <SavedBody media={info.data} fileName={stage.fileName} onClose={onClose} />
+          <SavedBody
+            media={info.data}
+            fileName={stage.fileName}
+            itemId={stage.itemId}
+            onClose={onClose}
+          />
         )}
 
         {info.data && (stage.kind === "ready" || stage.kind === "downloading") && (
@@ -325,7 +331,35 @@ function PendingBody({ url }: { url: string }) {
   );
 }
 
-function SavedBody({ media, fileName, onClose }: { media: MediaInfo; fileName: string; onClose: () => void }) {
+function SavedBody({
+  media, fileName, itemId, onClose,
+}: { media: MediaInfo; fileName: string; itemId: string; onClose: () => void }) {
+  const ask = useServerFn(suggestName);
+  const [description, setDescription] = useState("");
+  const [title, setTitle] = useState(media.title);
+  const [name, setName] = useState(fileName);
+  const [tags, setTags] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ext = fileName.split(".").pop() ?? "mp4";
+
+  const generate = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await ask({
+        data: { title: title.trim() || media.title, description: description.trim(), kind: ext === "mp3" || ext === "m4a" ? "audio" : "video", ext },
+      });
+      setName(out.fileName);
+      setTags(out.tags);
+      updateLibraryItem(itemId, { fileName: out.fileName, tags: out.tags });
+    } catch (e) {
+      setError((e as Error).message || "Couldn't name that file.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="pt-4">
       <span className="eyebrow">Saved{media.demo ? " · demo" : ""}</span>
@@ -333,12 +367,50 @@ function SavedBody({ media, fileName, onClose }: { media: MediaInfo; fileName: s
         <img src={media.thumbnail} alt="" width={80} height={80} className="size-20 shrink-0 rounded-xl object-cover" />
         <div className="min-w-0">
           <h2 className="font-display text-[20px] leading-[1.05] tracking-tight text-ink text-balance">{media.title}</h2>
-          <div className="mt-2 truncate font-mono text-[11px] text-ink/50">{fileName}</div>
+          <div className="mt-2 truncate font-mono text-[11px] text-ink/50" data-testid="saved-filename">{name}</div>
           <div className="mt-1 text-[12px] text-ink/55">
             {media.demo ? "Added to your library. Connect an extractor to save real files." : "In your device's Downloads."}
           </div>
         </div>
       </div>
+
+      <div className="mt-5 border-t border-line/15 pt-4">
+        <div className="eyebrow">Name it with AI</div>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          aria-label="Video title"
+          placeholder="Title"
+          className="mt-2 w-full rounded-xl border border-line/20 bg-card/60 px-3 py-2 text-[13px] text-ink placeholder:text-ink/30 focus:border-ink/40 focus:outline-none"
+        />
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          aria-label="Video description"
+          placeholder="Paste the description — Eva turns it into a clear file name and search tags."
+          rows={3}
+          className="mt-2 w-full resize-none rounded-xl border border-line/20 bg-card/60 px-3 py-2 text-[13px] leading-relaxed text-ink placeholder:text-ink/30 focus:border-ink/40 focus:outline-none"
+        />
+        <button
+          onClick={generate}
+          disabled={busy}
+          data-testid="suggest-name"
+          className="mt-2 w-full rounded-full border border-ink/25 px-4 py-2.5 font-display text-[13px] tracking-tight text-ink disabled:opacity-60"
+        >
+          {busy ? "Thinking…" : "Suggest name & tags"}
+        </button>
+        {error && <p className="mt-2 text-[12px] text-ink/60">{error}</p>}
+        {tags.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5" data-testid="ai-tags">
+            {tags.map((t) => (
+              <span key={t} className="rounded-full bg-ink/[0.06] px-2.5 py-1 font-mono text-[10px] text-ink/65">
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="mt-5 h-[3px] w-full rounded-full bg-accent" />
       <button
         onClick={onClose}
