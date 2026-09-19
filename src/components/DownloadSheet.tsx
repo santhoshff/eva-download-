@@ -348,7 +348,7 @@ function SavedBody({
     setError(null);
     try {
       const out = await ask({
-        data: { title: title.trim() || media.title, description: description.trim(), kind: media.formats[0]?.kind ?? "video", ext },
+        data: { title: title.trim() || media.title, description: description.trim(), kind: ext === "mp3" || ext === "m4a" ? "audio" : "video", ext },
       });
       setName(out.fileName);
       setTags(out.tags);
