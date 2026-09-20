@@ -49,10 +49,17 @@ export function removeFromLibrary(id: string) {
 }
 
 export function subscribeLibrary(cb: () => void) {
-  window.addEventListener(EVENT, cb);
-  window.addEventListener("storage", cb);
-  return () => {
-    window.removeEventListener(EVENT, cb);
-    window.removeEventListener("storage", cb);
-  };
+  if (typeof window === "undefined") return () => {};
+  try {
+    window.addEventListener(EVENT, cb);
+    window.addEventListener("storage", cb);
+    return () => {
+      try {
+        window.removeEventListener(EVENT, cb);
+        window.removeEventListener("storage", cb);
+      } catch {}
+    };
+  } catch {
+    return () => {};
+  }
 }

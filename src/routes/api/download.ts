@@ -20,7 +20,7 @@ export const Route = createFileRoute("/api/download")({
         const { url, format, directUrl } = parsed.data;
 
         // 1. If self-hosted microservice is configured, query it
-        const base = process.env["EVA_EXTRACTOR_URL"];
+        const base = typeof process !== "undefined" ? process.env?.["EVA_EXTRACTOR_URL"] : undefined;
         if (base) {
           try {
             const upstream = await fetch(

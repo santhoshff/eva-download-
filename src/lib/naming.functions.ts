@@ -45,7 +45,7 @@ function sanitizeBase(raw: string): string {
 export const suggestName = createServerFn({ method: "POST" })
   .validator((data: z.infer<typeof input>) => input.parse(data))
   .handler(async ({ data }): Promise<NameSuggestion> => {
-    const apiKey = process.env["LOVABLE_API_KEY"];
+    const apiKey = typeof process !== "undefined" ? process.env?.["LOVABLE_API_KEY"] : undefined;
     if (!apiKey) throw new Error("AI is not configured for this project yet.");
 
     const res = await fetch("https://ai.gateway.lovable.dev/v1/responses", {

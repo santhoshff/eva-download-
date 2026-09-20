@@ -33,12 +33,16 @@ const EMPTY: LibraryItem[] = [];
 let cache: LibraryItem[] = EMPTY;
 let cacheRaw = "";
 function snapshot() {
-  const raw = typeof window === "undefined" ? "" : window.localStorage.getItem("eva.library.v1") ?? "";
-  if (raw !== cacheRaw) {
-    cacheRaw = raw;
-    cache = readLibrary();
+  try {
+    const raw = typeof window === "undefined" ? "" : window.localStorage?.getItem("eva.library.v1") ?? "";
+    if (raw !== cacheRaw) {
+      cacheRaw = raw;
+      cache = readLibrary();
+    }
+    return cache;
+  } catch {
+    return EMPTY;
   }
-  return cache;
 }
 
 function Home() {

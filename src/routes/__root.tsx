@@ -7,6 +7,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
+import type { ReactNode } from "react";
 import appCss from "../styles.css?url";
 
 function NotFoundComponent() {
@@ -32,7 +33,7 @@ function NotFoundComponent() {
 }
 
 function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
-  console.error(error);
+  console.error("Root ErrorComponent caught:", error);
   const router = useRouter();
 
   return (
@@ -44,6 +45,18 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <p className="mt-2 text-sm text-muted-foreground">
           Something went wrong on our end. You can try refreshing or head back home.
         </p>
+        {error && (
+          <div className="mt-4 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-left">
+            <p className="font-mono text-xs font-semibold text-destructive">
+              {error.name || "Error"}: {error.message || String(error)}
+            </p>
+            {error.stack && (
+              <pre className="mt-2 max-h-48 overflow-auto font-mono text-[11px] text-destructive/80 whitespace-pre-wrap">
+                {error.stack}
+              </pre>
+            )}
+          </div>
+        )}
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
             onClick={() => {
