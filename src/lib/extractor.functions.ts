@@ -14,7 +14,7 @@ export const getExtractorStatus = createServerFn({ method: "GET" }).handler(asyn
 }));
 
 export const getMediaInfo = createServerFn({ method: "POST" })
-  .inputValidator((input) => z.object({ url: z.string().url() }).parse(input))
+  .validator((input: { url: string }) => z.object({ url: z.string().url() }).parse(input))
   .handler(async ({ data }): Promise<MediaInfo> => {
     const base = process.env["EVA_EXTRACTOR_URL"];
     if (base) {

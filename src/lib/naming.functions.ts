@@ -43,7 +43,7 @@ function sanitizeBase(raw: string): string {
 
 /** Ask the model for a clear file name and searchable tags for a saved download. */
 export const suggestName = createServerFn({ method: "POST" })
-  .inputValidator((data) => input.parse(data))
+  .validator((data: z.infer<typeof input>) => input.parse(data))
   .handler(async ({ data }): Promise<NameSuggestion> => {
     const apiKey = process.env["LOVABLE_API_KEY"];
     if (!apiKey) throw new Error("AI is not configured for this project yet.");
