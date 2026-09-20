@@ -1,13 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import ytdlPkg from "yt-dlp-exec";
 import { Readable } from "node:stream";
-
-const ytdlExec = ((ytdlPkg as any).exec || (ytdlPkg as any).default?.exec || ytdlPkg) as (
-  url: string,
-  flags?: any,
-  options?: any,
-) => any;
 
 const query = z.object({
   url: z.string().url(),
@@ -74,8 +67,13 @@ export const Route = createFileRoute("/api/download")({
           }
         }
 
-        // 3. Fallback: yt-dlp process streaming directly without API key
+        // 3. Fallback: yt-dlp process streaming directly
         try {
+          const ytdlModule = (await import("yt-dlp-exec").catch(() => null)) as any;
+          if (!ytdlModule) {
+            return Response.json({ error: "No external extractor configured and yt-dlp binary is unavailable" }, { status: 503 });
+          }
+          const ytdlExec = (ytdlModule.exec || ytdlModule.default?.exec || ytdlModule);
           const proc = ytdlExec(url, {
             format: format || "best",
             output: "-",

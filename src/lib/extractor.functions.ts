@@ -1,16 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import ytdlPkg from "yt-dlp-exec";
 import { detectPlatform, mockMediaInfo, type MediaFormat, type MediaInfo } from "./media";
 
-const ytdl = (typeof ytdlPkg === "function" ? ytdlPkg : (ytdlPkg as any).default || ytdlPkg) as (
-  url: string,
-  flags?: any,
-  options?: any,
-) => Promise<any>;
-
 export const getExtractorStatus = createServerFn({ method: "GET" }).handler(async () => ({
-  connected: true,
+  connected: Boolean(process.env["EVA_EXTRACTOR_URL"]),
 }));
 
 export const getMediaInfo = createServerFn({ method: "POST" })
@@ -53,6 +46,9 @@ export const getMediaInfo = createServerFn({ method: "POST" })
     }
 
     try {
+      const ytdlModule = (await import("yt-dlp-exec").catch(() => null)) as any;
+      if (!ytdlModule) return mockMediaInfo(data.url);
+      const ytdl = typeof ytdlModule === "function" ? ytdlModule : ytdlModule.default || ytdlModule;
       const raw = (await ytdl(data.url, {
         dumpSingleJson: true,
         noWarnings: true,
