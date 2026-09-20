@@ -1,13 +1,14 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore, type FormEvent } from "react";
 import { z } from "zod";
 import { DownloadSheet } from "@/components/DownloadSheet";
 import { BrandMark } from "@/components/BrandMark";
 import { getExtractorStatus } from "@/lib/extractor.functions";
 import { readLibrary, removeFromLibrary, subscribeLibrary, type LibraryItem } from "@/lib/library";
 import { PLATFORM_LABEL, extractUrl, formatDuration } from "@/lib/media";
+import { useClipboardLink } from "@/hooks/use-clipboard-link";
 
 const searchSchema = z.object({
   url: z.string().optional(),
@@ -47,6 +48,7 @@ function Home() {
   const [input, setInput] = useState("");
   const [invalid, setInvalid] = useState(false);
   const library = useSyncExternalStore(subscribeLibrary, snapshot, () => EMPTY);
+  const { clipboardUrl, clearClipboardUrl } = useClipboardLink();
 
   const fetchStatus = useServerFn(getExtractorStatus);
   const status = useQuery({ queryKey: ["extractor-status"], queryFn: () => fetchStatus(), staleTime: Infinity });
@@ -60,6 +62,13 @@ function Home() {
     }
   }, [search.url, search.text, search.title, navigate]);
 
+  // Auto-open the sheet when a supported link is detected in the clipboard.
+  useEffect(() => {
+    if (clipboardUrl && !active) {
+      setActive(clipboardUrl);
+    }
+  }, [clipboardUrl, active]);
+
   const open = (raw: string) => {
     const url = extractUrl(raw);
     if (!url) { setInvalid(true); return; }
@@ -68,6 +77,11 @@ function Home() {
   };
 
   const submit = (e: FormEvent) => { e.preventDefault(); open(input); };
+
+  const handleClose = useCallback(() => {
+    setActive(null);
+    clearClipboardUrl();
+  }, [clearClipboardUrl]);
 
   const paste = async () => {
     try {
@@ -164,7 +178,7 @@ function Home() {
         </p>
       </footer>
 
-      {active && <DownloadSheet key={active} url={active} onClose={() => setActive(null)} />}
+      {active && <DownloadSheet key={active} url={active} onClose={handleClose} />}
     </main>
   );
 }

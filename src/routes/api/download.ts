@@ -1,40 +1,105 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
+import ytdlPkg from "yt-dlp-exec";
+import { Readable } from "node:stream";
 
-const query = z.object({ url: z.string().url(), format: z.string().min(1) });
+const ytdlExec = ((ytdlPkg as any).exec || (ytdlPkg as any).default?.exec || ytdlPkg) as (
+  url: string,
+  flags?: any,
+  options?: any,
+) => any;
+
+const query = z.object({
+  url: z.string().url(),
+  format: z.string().min(1),
+  directUrl: z.string().url().optional().or(z.literal("")),
+});
 
 export const Route = createFileRoute("/api/download")({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        const base = process.env["EVA_EXTRACTOR_URL"];
-        if (!base) {
-          return Response.json({ error: "No extractor connected" }, { status: 503 });
-        }
         const params = Object.fromEntries(new URL(request.url).searchParams);
         const parsed = query.safeParse(params);
         if (!parsed.success) {
-          return Response.json({ error: "Invalid request" }, { status: 400 });
+          return Response.json({ error: "Invalid request parameters" }, { status: 400 });
         }
-        const { url, format } = parsed.data;
-        const upstream = await fetch(
-          `${base.replace(/\/$/, "")}/download?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`,
-        );
-        if (!upstream.ok || !upstream.body) {
-          const body = await upstream.text().catch(() => "");
-          return Response.json(
-            { error: body.trim() || `Extractor returned ${upstream.status}` },
-            { status: upstream.status || 502 },
-          );
+        const { url, format, directUrl } = parsed.data;
+
+        // 1. If self-hosted microservice is configured, query it
+        const base = process.env["EVA_EXTRACTOR_URL"];
+        if (base) {
+          try {
+            const upstream = await fetch(
+              `${base.replace(/\/$/, "")}/download?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`,
+            );
+            if (upstream.ok && upstream.body) {
+              const headers = new Headers();
+              for (const h of ["content-type", "content-length", "content-disposition"]) {
+                const v = upstream.headers.get(h);
+                if (v) headers.set(h, v);
+              }
+              headers.set("cache-control", "no-store");
+              return new Response(upstream.body, { status: 200, headers });
+            }
+          } catch {
+            // Fall back to built-in local extractor
+          }
         }
-        const headers = new Headers();
-        for (const h of ["content-type", "content-length", "content-disposition"]) {
-          const v = upstream.headers.get(h);
-          if (v) headers.set(h, v);
+
+        // 2. Direct URL streaming (ultra fast CDN transfer with real progress)
+        if (directUrl && directUrl.startsWith("http")) {
+          try {
+            const upstream = await fetch(directUrl, {
+              headers: {
+                "User-Agent":
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                Accept: "*/*",
+                Referer: url,
+              },
+            });
+
+            if (upstream.ok && upstream.body) {
+              const headers = new Headers();
+              const ct = upstream.headers.get("content-type");
+              const cl = upstream.headers.get("content-length");
+              if (ct) headers.set("content-type", ct);
+              if (cl) headers.set("content-length", cl);
+              headers.set("content-disposition", `attachment; filename="download"`);
+              headers.set("cache-control", "no-store");
+              return new Response(upstream.body, { status: 200, headers });
+            }
+          } catch (e) {
+            console.warn("Direct CDN streaming failed, falling back to yt-dlp.exec:", e);
+          }
         }
-        headers.set("cache-control", "no-store");
-        return new Response(upstream.body, { status: 200, headers });
+
+        // 3. Fallback: yt-dlp process streaming directly without API key
+        try {
+          const proc = ytdlExec(url, {
+            format: format || "best",
+            output: "-",
+          });
+
+          if (!proc.stdout) {
+            return Response.json({ error: "Failed to open media stream" }, { status: 500 });
+          }
+
+          const webStream = Readable.toWeb(proc.stdout) as ReadableStream<Uint8Array>;
+          const headers = new Headers();
+          const isAudio =
+            format.startsWith("a") || format === "140" || format === "251" || format === "139";
+          headers.set("content-type", isAudio ? "audio/mp4" : "video/mp4");
+          headers.set("content-disposition", `attachment; filename="download.${isAudio ? "mp3" : "mp4"}"`);
+          headers.set("cache-control", "no-store");
+
+          return new Response(webStream, { status: 200, headers });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Download failed";
+          return Response.json({ error: message }, { status: 500 });
+        }
       },
     },
   },
 });
+

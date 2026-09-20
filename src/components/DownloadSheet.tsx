@@ -127,8 +127,11 @@ export function DownloadSheet({ url, onClose }: Props) {
 
     try {
       setStage({ kind: "downloading", pct: 0, received: 0 });
+      const directParam = selected.directUrl
+        ? `&directUrl=${encodeURIComponent(selected.directUrl)}`
+        : "";
       const res = await fetch(
-        `/api/download?url=${encodeURIComponent(media.url)}&format=${encodeURIComponent(selected.id)}`,
+        `/api/download?url=${encodeURIComponent(media.url)}&format=${encodeURIComponent(selected.id)}${directParam}`,
       );
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({ error: `Download failed (${res.status})` }));

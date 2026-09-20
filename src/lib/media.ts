@@ -11,6 +11,7 @@ export interface MediaFormat {
   label: string; // "1080p" | "320 kbps"
   sizeBytes?: number | undefined;
   ext: string;
+  directUrl?: string | undefined;
 }
 
 export interface MediaInfo {
