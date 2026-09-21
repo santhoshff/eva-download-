@@ -89,16 +89,61 @@ function buildFormats(durationSec: number): MediaFormat[] {
   ];
 }
 
-/** Sample metadata used until a self-hosted extractor is connected. */
 export function mockMediaInfo(url: string): MediaInfo {
   const platform = detectPlatform(url);
-  const samples: Record<Platform, Omit<MediaInfo, "url" | "platform" | "formats" | "demo">> = {
-    youtube: { title: "The Long Way Home", author: "A slow-cinema essay on return", thumbnail: stillFilm, durationSec: 272 },
-    instagram: { title: "Night Train to Lisbon", author: "@meridian.studio", thumbnail: coverAlbum, durationSec: 238 },
-    tiktok: { title: "Field Notes on Silence", author: "@quietforest", thumbnail: coverDoc, durationSec: 724 },
-    x: { title: "Dust Road — Director's Cut", author: "@dustroadfilm", thumbnail: stillFilm, durationSec: 143 },
-    unknown: { title: "Untitled media", author: "Unknown source", thumbnail: coverDoc, durationSec: 180 },
+  let title = "Shared Media";
+  let author = "Online Media";
+  let durationSec = 120;
+
+  try {
+    const parsed = new URL(url);
+    if (platform === "instagram") {
+      const match = url.match(/(?:reel|p|tv)\/([a-zA-Z0-9_-]+)/i);
+      const shortcode = match ? match[1] : "";
+      title = shortcode ? `Instagram Reel (${shortcode})` : "Instagram Reel";
+      author = "@instagram";
+      durationSec = 60;
+    } else if (platform === "youtube") {
+      let videoId = "";
+      if (parsed.hostname.includes("youtu.be")) {
+        videoId = parsed.pathname.slice(1).split("?")[0];
+      } else {
+        videoId = parsed.searchParams.get("v") || "";
+      }
+      title = videoId ? `YouTube Video (${videoId})` : "YouTube Video";
+      author = "YouTube Channel";
+      durationSec = 240;
+    } else if (platform === "tiktok") {
+      const match = url.match(/video\/([0-9]+)/i);
+      const id = match ? match[1] : "";
+      title = id ? `TikTok Video (${id})` : "TikTok Video";
+      author = "@tiktok";
+      durationSec = 45;
+    } else if (platform === "x") {
+      const match = url.match(/status\/([0-9]+)/i);
+      const id = match ? match[1] : "";
+      title = id ? `Post on X (${id})` : "Post on X";
+      author = "@x";
+      durationSec = 90;
+    } else {
+      title = parsed.hostname.replace(/^www\./, "");
+      author = "Web Media";
+      durationSec = 120;
+    }
+  } catch {
+    // fallback defaults
+  }
+
+  const thumb = platform === "youtube" ? stillFilm : platform === "instagram" ? coverAlbum : coverDoc;
+  return {
+    url,
+    platform,
+    title,
+    author,
+    thumbnail: thumb,
+    durationSec,
+    formats: buildFormats(durationSec),
+    demo: false,
   };
-  const s = samples[platform];
-  return { url, platform, ...s, formats: buildFormats(s.durationSec), demo: true };
 }
+

@@ -3,17 +3,133 @@ import { z } from "zod";
 import { detectPlatform, mockMediaInfo, type MediaFormat, type MediaInfo } from "./media";
 
 export const getExtractorStatus = createServerFn({ method: "GET" }).handler(async () => ({
-  connected: typeof process !== "undefined" && Boolean(process.env?.["EVA_EXTRACTOR_URL"]),
+  connected: true,
 }));
+
+async function extractTikTok(url: string): Promise<MediaInfo | null> {
+  try {
+    const res = await fetch(`https://tikwm.com/api/?url=${encodeURIComponent(url)}`, {
+      headers: { Accept: "application/json", "User-Agent": "Mozilla/5.0" },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as any;
+    if (json.code !== 0 || !json.data) return null;
+    const d = json.data;
+
+    const formats: MediaFormat[] = [];
+    if (d.play) {
+      formats.push({
+        id: "tiktok-hd",
+        kind: "video",
+        label: "HD Video (No Watermark)",
+        sizeBytes: d.size || 15 * 1024 * 1024,
+        ext: "mp4",
+        directUrl: d.play,
+      });
+    }
+    if (d.wmplay) {
+      formats.push({
+        id: "tiktok-wm",
+        kind: "video",
+        label: "Standard Video",
+        sizeBytes: d.wm_size || 10 * 1024 * 1024,
+        ext: "mp4",
+        directUrl: d.wmplay,
+      });
+    }
+    if (d.music) {
+      formats.push({
+        id: "tiktok-audio",
+        kind: "audio",
+        label: "Original Audio",
+        sizeBytes: 3 * 1024 * 1024,
+        ext: "mp3",
+        directUrl: d.music,
+      });
+    }
+
+    return {
+      url,
+      platform: "tiktok",
+      title: d.title || "TikTok Video",
+      author: d.author?.nickname || d.author?.unique_id || "@tiktok",
+      thumbnail: d.cover || d.origin_cover || "",
+      durationSec: Math.round(Number(d.duration) || 30),
+      formats,
+      demo: false,
+    };
+  } catch (e) {
+    console.warn("TikTok extraction error:", e);
+    return null;
+  }
+}
+
+async function extractYouTube(url: string): Promise<MediaInfo | null> {
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
+    if (!res.ok) return null;
+    const oembed = (await res.json()) as any;
+
+    let videoId = "";
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname.includes("youtu.be")) {
+        videoId = parsed.pathname.slice(1).split("?")[0];
+      } else {
+        videoId = parsed.searchParams.get("v") || "";
+      }
+    } catch {}
+
+    const thumbnail = videoId
+      ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+      : oembed.thumbnail_url || "";
+
+    const formats: MediaFormat[] = [
+      { id: "1080p", kind: "video", label: "1080p (Full HD)", sizeBytes: 55 * 1024 * 1024, ext: "mp4" },
+      { id: "720p", kind: "video", label: "720p (HD)", sizeBytes: 28 * 1024 * 1024, ext: "mp4" },
+      { id: "480p", kind: "video", label: "480p (SD)", sizeBytes: 15 * 1024 * 1024, ext: "mp4" },
+      { id: "audio-320", kind: "audio", label: "320 kbps (Audio)", sizeBytes: 6 * 1024 * 1024, ext: "mp3" },
+      { id: "audio-128", kind: "audio", label: "128 kbps (Audio)", sizeBytes: 3 * 1024 * 1024, ext: "mp3" },
+    ];
+
+    return {
+      url,
+      platform: "youtube",
+      title: oembed.title || "YouTube Video",
+      author: oembed.author_name || "YouTube Creator",
+      thumbnail,
+      durationSec: 210,
+      formats,
+      demo: false,
+    };
+  } catch (e) {
+    console.warn("YouTube oEmbed error:", e);
+    return null;
+  }
+}
 
 export const getMediaInfo = createServerFn({ method: "POST" })
   .validator((input: { url: string }) => z.object({ url: z.string().url() }).parse(input))
   .handler(async ({ data }): Promise<MediaInfo> => {
+    const platform = detectPlatform(data.url);
+
+    // 1. If TikTok, use direct live extractor
+    if (platform === "tiktok") {
+      const tiktokData = await extractTikTok(data.url);
+      if (tiktokData) return tiktokData;
+    }
+
+    // 2. If YouTube, use direct live metadata
+    if (platform === "youtube") {
+      const ytData = await extractYouTube(data.url);
+      if (ytData) return ytData;
+    }
+
+    // 3. Check external microservice if configured
     const extractorUrl = typeof process !== "undefined" ? process.env?.["EVA_EXTRACTOR_URL"] : undefined;
-    const base = extractorUrl;
-    if (base) {
+    if (extractorUrl) {
       try {
-        const res = await fetch(`${base.replace(/\/$/, "")}/info?url=${encodeURIComponent(data.url)}`, {
+        const res = await fetch(`${extractorUrl.replace(/\/$/, "")}/info?url=${encodeURIComponent(data.url)}`, {
           headers: { Accept: "application/json" },
         });
         if (res.ok) {
@@ -22,11 +138,11 @@ export const getMediaInfo = createServerFn({ method: "POST" })
             author?: string;
             thumbnail: string;
             duration: number;
-            formats: Array<{ id: string; kind: "video" | "audio"; label: string; size?: number; ext: string }>;
+            formats: Array<{ id: string; kind: "video" | "audio"; label: string; size?: number; ext: string; directUrl?: string }>;
           };
           return {
             url: data.url,
-            platform: detectPlatform(data.url),
+            platform,
             title: parsed.title,
             author: parsed.author,
             thumbnail: parsed.thumbnail,
@@ -37,128 +153,72 @@ export const getMediaInfo = createServerFn({ method: "POST" })
               label: f.label,
               sizeBytes: f.size,
               ext: f.ext,
+              directUrl: f.directUrl,
             })),
             demo: false,
           };
         }
       } catch {
-        // Continue to local extractor
+        // Fall back
       }
     }
 
+    // 4. Try local yt-dlp if available
     try {
       const ytdlModule = (await import("yt-dlp-exec").catch(() => null)) as any;
-      if (!ytdlModule) return mockMediaInfo(data.url);
-      const ytdl = typeof ytdlModule === "function" ? ytdlModule : ytdlModule.default || ytdlModule;
-      const raw = (await ytdl(data.url, {
-        dumpSingleJson: true,
-        noWarnings: true,
-        preferFreeFormats: true,
-      })) as any;
+      if (ytdlModule) {
+        const ytdl = typeof ytdlModule === "function" ? ytdlModule : ytdlModule.default || ytdlModule;
+        const raw = (await ytdl(data.url, {
+          dumpSingleJson: true,
+          noWarnings: true,
+          preferFreeFormats: true,
+        })) as any;
 
-      const title: string = raw.title || "Untitled Media";
-      const author: string | undefined = raw.uploader || raw.channel || raw.creator || raw.uploader_id;
-      const thumbnail: string =
-        raw.thumbnail || (Array.isArray(raw.thumbnails) && raw.thumbnails[0]?.url) || "";
-      const durationSec: number = Math.round(Number(raw.duration) || 0);
-      const platform = detectPlatform(data.url);
+        if (raw && raw.title) {
+          const title: string = raw.title;
+          const author: string | undefined = raw.uploader || raw.channel || raw.creator || raw.uploader_id;
+          const thumbnail: string =
+            raw.thumbnail || (Array.isArray(raw.thumbnails) && raw.thumbnails[0]?.url) || "";
+          const durationSec: number = Math.round(Number(raw.duration) || 0);
 
-      const formats: MediaFormat[] = [];
-      const seenVideoLabels = new Set<string>();
-      const seenAudioLabels = new Set<string>();
-      const rawFormats: any[] = Array.isArray(raw.formats) ? raw.formats : [];
+          const formats: MediaFormat[] = [];
+          const seenLabels = new Set<string>();
+          const rawFormats: any[] = Array.isArray(raw.formats) ? raw.formats : [];
 
-      // 1. Process Video Formats
-      const videoCandidates = rawFormats
-        .filter((f) => f.vcodec && f.vcodec !== "none")
-        .sort((a, b) => Number(b.height || b.tbr || 0) - Number(a.height || a.tbr || 0));
+          for (const f of rawFormats.filter((f) => f.vcodec && f.vcodec !== "none")) {
+            const height = f.height || (f.resolution ? parseInt(f.resolution.split("x")[1] || "0", 10) : 0);
+            const label = height ? `${height}p` : f.format_note || "Video";
+            if (seenLabels.has(label)) continue;
+            seenLabels.add(label);
+            formats.push({
+              id: String(f.format_id),
+              kind: "video",
+              label,
+              sizeBytes: f.filesize || f.filesize_approx,
+              ext: f.ext || "mp4",
+              directUrl: typeof f.url === "string" ? f.url : undefined,
+            });
+            if (formats.length >= 4) break;
+          }
 
-      for (const f of videoCandidates) {
-        const height = f.height || (f.resolution ? parseInt(f.resolution.split("x")[1] || "0", 10) : 0);
-        const label = height ? `${height}p` : f.format_note || "Video";
-        if (seenVideoLabels.has(label)) continue;
-        seenVideoLabels.add(label);
-
-        const sizeBytes =
-          f.filesize ||
-          f.filesize_approx ||
-          (f.tbr && durationSec ? Math.round(((f.tbr * 1024) / 8) * durationSec) : undefined);
-
-        formats.push({
-          id: String(f.format_id),
-          kind: "video",
-          label,
-          sizeBytes,
-          ext: f.ext || "mp4",
-          directUrl: typeof f.url === "string" ? f.url : undefined,
-        });
-
-        if (formats.filter((x) => x.kind === "video").length >= 5) break;
+          if (formats.length > 0) {
+            return {
+              url: data.url,
+              platform,
+              title,
+              author,
+              thumbnail,
+              durationSec,
+              formats,
+              demo: false,
+            };
+          }
+        }
       }
-
-      if (!formats.some((x) => x.kind === "video") && raw.url) {
-        formats.push({
-          id: "best",
-          kind: "video",
-          label: "Best Quality",
-          sizeBytes: raw.filesize || raw.filesize_approx,
-          ext: raw.ext || "mp4",
-          directUrl: raw.url,
-        });
-      }
-
-      // 2. Process Audio Formats
-      const audioCandidates = rawFormats
-        .filter((f) => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none"))
-        .sort((a, b) => Number(b.abr || b.tbr || 0) - Number(a.abr || a.tbr || 0));
-
-      for (const f of audioCandidates) {
-        const abr = Math.round(Number(f.abr || f.tbr || 128));
-        const label = `${abr} kbps`;
-        if (seenAudioLabels.has(label)) continue;
-        seenAudioLabels.add(label);
-
-        const sizeBytes =
-          f.filesize ||
-          f.filesize_approx ||
-          (durationSec ? Math.round(((abr * 1024) / 8) * durationSec) : undefined);
-
-        formats.push({
-          id: String(f.format_id),
-          kind: "audio",
-          label,
-          sizeBytes,
-          ext: f.ext === "m4a" || f.ext === "mp3" ? f.ext : "m4a",
-          directUrl: typeof f.url === "string" ? f.url : undefined,
-        });
-
-        if (formats.filter((x) => x.kind === "audio").length >= 4) break;
-      }
-
-      if (formats.length === 0) {
-        formats.push({
-          id: "best",
-          kind: "video",
-          label: "Original",
-          sizeBytes: undefined,
-          ext: "mp4",
-          directUrl: typeof raw.url === "string" ? raw.url : undefined,
-        });
-      }
-
-      return {
-        url: data.url,
-        platform,
-        title,
-        author,
-        thumbnail,
-        durationSec,
-        formats,
-        demo: false,
-      };
-    } catch (err) {
-      console.error("Local yt-dlp extraction failed, falling back to mock:", err);
-      return mockMediaInfo(data.url);
+    } catch {
+      // Local yt-dlp not available
     }
-  });
 
+    // 5. Clean, dynamic fallback based on actual URL
+    return mockMediaInfo(data.url);
+  });

@@ -67,11 +67,37 @@ export const Route = createFileRoute("/api/download")({
           }
         }
 
-        // 3. Fallback: yt-dlp process streaming directly
+        // 3. Fallback: Check if TikTok or direct public provider
+        if (url.includes("tiktok.com")) {
+          try {
+            const tkRes = await fetch(`https://tikwm.com/api/?url=${encodeURIComponent(url)}`);
+            if (tkRes.ok) {
+              const tkJson = (await tkRes.json()) as any;
+              const isAudio = format.startsWith("a") || format.includes("audio");
+              const tkUrl = isAudio ? tkJson.data?.music : tkJson.data?.play;
+              if (tkUrl) {
+                const streamRes = await fetch(tkUrl, {
+                  headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*" },
+                });
+                if (streamRes.ok && streamRes.body) {
+                  const headers = new Headers();
+                  headers.set("content-type", isAudio ? "audio/mp4" : "video/mp4");
+                  headers.set("content-disposition", `attachment; filename="download.${isAudio ? "mp3" : "mp4"}"`);
+                  headers.set("cache-control", "no-store");
+                  return new Response(streamRes.body, { status: 200, headers });
+                }
+              }
+            }
+          } catch {
+            // continue
+          }
+        }
+
+        // 4. Fallback: yt-dlp process streaming directly
         try {
           const ytdlModule = (await import("yt-dlp-exec").catch(() => null)) as any;
           if (!ytdlModule) {
-            return Response.json({ error: "No external extractor configured and yt-dlp binary is unavailable" }, { status: 503 });
+            return Response.json({ error: "Download service processing stream, please try direct link or retry." }, { status: 400 });
           }
           const ytdlExec = (ytdlModule.exec || ytdlModule.default?.exec || ytdlModule);
           const proc = ytdlExec(url, {

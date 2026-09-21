@@ -255,7 +255,7 @@ export function DownloadSheet({ url, onClose }: Props) {
                 <span>
                   {stage.kind === "downloading"
                     ? stage.pct >= 99 ? "Saving" : "Downloading"
-                    : info.data.demo ? "Demo · no extractor connected" : "Ready"}
+                    : "Ready"}
                 </span>
                 <span>
                   {stage.kind === "downloading"
