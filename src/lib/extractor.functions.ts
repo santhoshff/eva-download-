@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { detectPlatform, mockMediaInfo, type MediaFormat, type MediaInfo } from "./media";
 import { extractInstagram } from "./instagram";
+import { extractYouTube } from "./youtube";
 
 export const getExtractorStatus = createServerFn({ method: "GET" }).handler(async () => ({
   connected: true,
@@ -65,50 +66,6 @@ async function extractTikTok(url: string): Promise<MediaInfo | null> {
   }
 }
 
-async function extractYouTube(url: string): Promise<MediaInfo | null> {
-  try {
-    const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
-    if (!res.ok) return null;
-    const oembed = (await res.json()) as any;
-
-    let videoId = "";
-    try {
-      const parsed = new URL(url);
-      if (parsed.hostname.includes("youtu.be")) {
-        videoId = parsed.pathname.slice(1).split("?")[0];
-      } else {
-        videoId = parsed.searchParams.get("v") || "";
-      }
-    } catch {}
-
-    const thumbnail = videoId
-      ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
-      : oembed.thumbnail_url || "";
-
-    const formats: MediaFormat[] = [
-      { id: "1080p", kind: "video", label: "1080p (Full HD)", sizeBytes: 55 * 1024 * 1024, ext: "mp4" },
-      { id: "720p", kind: "video", label: "720p (HD)", sizeBytes: 28 * 1024 * 1024, ext: "mp4" },
-      { id: "480p", kind: "video", label: "480p (SD)", sizeBytes: 15 * 1024 * 1024, ext: "mp4" },
-      { id: "audio-320", kind: "audio", label: "320 kbps (Audio)", sizeBytes: 6 * 1024 * 1024, ext: "mp3" },
-      { id: "audio-128", kind: "audio", label: "128 kbps (Audio)", sizeBytes: 3 * 1024 * 1024, ext: "mp3" },
-    ];
-
-    return {
-      url,
-      platform: "youtube",
-      title: oembed.title || "YouTube Video",
-      author: oembed.author_name || "YouTube Creator",
-      thumbnail,
-      durationSec: 210,
-      formats,
-      demo: false,
-    };
-  } catch (e) {
-    console.warn("YouTube oEmbed error:", e);
-    return null;
-  }
-}
-
 export const getMediaInfo = createServerFn({ method: "POST" })
   .validator((input: { url: string }) => z.object({ url: z.string().url() }).parse(input))
   .handler(async ({ data }): Promise<MediaInfo> => {
@@ -120,10 +77,32 @@ export const getMediaInfo = createServerFn({ method: "POST" })
       if (tiktokData) return tiktokData;
     }
 
-    // 2. If YouTube, use direct live metadata
+    // 2. If YouTube, use direct live extractor
     if (platform === "youtube") {
-      const ytData = await extractYouTube(data.url);
-      if (ytData) return ytData;
+      try {
+        const ytData = await extractYouTube(data.url);
+        if (ytData) {
+          return {
+            url: data.url,
+            platform: "youtube",
+            title: ytData.title,
+            author: ytData.author,
+            thumbnail: ytData.thumbnail,
+            durationSec: ytData.durationSec,
+            formats: ytData.formats.map((f) => ({
+              id: f.id,
+              kind: f.kind,
+              label: f.label,
+              sizeBytes: f.sizeBytes,
+              ext: f.ext,
+              directUrl: f.directUrl,
+            })),
+            demo: false,
+          };
+        }
+      } catch (err) {
+        console.warn("YouTube extractor error:", err);
+      }
     }
 
     // 3. If Instagram, use direct live Polaris extractor

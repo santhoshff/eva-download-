@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { Readable } from "node:stream";
 import { extractInstagram } from "../../lib/instagram";
+import { extractYouTube } from "../../lib/youtube";
 
 const query = z.object({
   url: z.string().url(),
@@ -132,7 +133,44 @@ export const Route = createFileRoute("/api/download")({
           }
         }
 
-        // 5. Try yt-dlp local process if available and callable
+        // 5. Fallback: Check if YouTube direct stream
+        if (url.includes("youtube.com") || url.includes("youtu.be")) {
+          try {
+            const ytData = await extractYouTube(url);
+            const targetFormat = isAudio
+              ? ytData?.formats.find((f) => f.kind === "audio") || ytData?.formats[0]
+              : ytData?.formats.find((f) => f.kind === "video") || ytData?.formats[0];
+            const ytUrl = targetFormat?.directUrl || ytData?.directVideoUrl || ytData?.directAudioUrl;
+
+            if (ytUrl) {
+              const ytRes = await fetch(ytUrl, {
+                headers: {
+                  "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  Accept: "*/*",
+                  Referer: "https://www.youtube.com/",
+                },
+              });
+              if (ytRes.ok && ytRes.body) {
+                const headers = new Headers();
+                const ct = ytRes.headers.get("content-type");
+                const cl = ytRes.headers.get("content-length");
+                if (ct) headers.set("content-type", ct);
+                if (cl) headers.set("content-length", cl);
+                headers.set(
+                  "content-disposition",
+                  `attachment; filename="${ytData?.id || "video"}.${isAudio ? "mp3" : "mp4"}"`,
+                );
+                headers.set("cache-control", "no-store");
+                return new Response(ytRes.body, { status: 200, headers });
+              }
+            }
+          } catch (e) {
+            console.warn("YouTube streaming error:", e);
+          }
+        }
+
+        // 6. Try yt-dlp local process if available and callable
         try {
           const ytdlModule = (await import("yt-dlp-exec").catch(() => null)) as any;
           const ytdlExec =
