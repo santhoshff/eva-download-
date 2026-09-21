@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { Readable } from "node:stream";
+import { extractInstagram } from "../../lib/instagram";
 
 const query = z.object({
   url: z.string().url(),
@@ -98,7 +99,40 @@ export const Route = createFileRoute("/api/download")({
           }
         }
 
-        // 4. Try yt-dlp local process if available and callable
+        // 4. Fallback: Check if Instagram direct stream
+        if (url.includes("instagram.com")) {
+          try {
+            const igData = await extractInstagram(url);
+            const igVideoUrl = igData?.videoVersions?.[0]?.url || igData?.videoUrl;
+            if (igVideoUrl) {
+              const igRes = await fetch(igVideoUrl, {
+                headers: {
+                  "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  Accept: "*/*",
+                  Referer: "https://www.instagram.com/",
+                },
+              });
+              if (igRes.ok && igRes.body) {
+                const headers = new Headers();
+                const ct = igRes.headers.get("content-type");
+                const cl = igRes.headers.get("content-length");
+                if (ct) headers.set("content-type", ct);
+                if (cl) headers.set("content-length", cl);
+                headers.set(
+                  "content-disposition",
+                  `attachment; filename="${igData.id || "reel"}.${isAudio ? "mp3" : "mp4"}"`,
+                );
+                headers.set("cache-control", "no-store");
+                return new Response(igRes.body, { status: 200, headers });
+              }
+            }
+          } catch (e) {
+            console.warn("Instagram streaming error:", e);
+          }
+        }
+
+        // 5. Try yt-dlp local process if available and callable
         try {
           const ytdlModule = (await import("yt-dlp-exec").catch(() => null)) as any;
           const ytdlExec =

@@ -134,7 +134,30 @@ export function mockMediaInfo(url: string): MediaInfo {
     // fallback defaults
   }
 
-  const thumb = platform === "youtube" ? stillFilm : platform === "instagram" ? coverAlbum : coverDoc;
+  const INSTAGRAM_FALLBACK_THUMB = `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600">
+      <defs>
+        <linearGradient id="ig" x1="0%" y1="100%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#fdf497" />
+          <stop offset="5%" stop-color="#fdf497" />
+          <stop offset="45%" stop-color="#fd5949" />
+          <stop offset="60%" stop-color="#d6249f" />
+          <stop offset="90%" stop-color="#285AEB" />
+        </linearGradient>
+      </defs>
+      <rect width="600" height="600" rx="40" fill="url(#ig)" />
+      <rect x="170" y="170" width="260" height="260" rx="60" fill="none" stroke="#ffffff" stroke-width="26" />
+      <circle cx="300" cy="300" r="65" fill="none" stroke="#ffffff" stroke-width="26" />
+      <circle cx="370" cy="230" r="18" fill="#ffffff" />
+    </svg>`
+  )}`;
+
+  const thumb =
+    platform === "youtube"
+      ? stillFilm
+      : platform === "instagram"
+        ? INSTAGRAM_FALLBACK_THUMB
+        : coverDoc;
   return {
     url,
     platform,

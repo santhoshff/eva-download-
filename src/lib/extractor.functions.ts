@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { detectPlatform, mockMediaInfo, type MediaFormat, type MediaInfo } from "./media";
+import { extractInstagram } from "./instagram";
 
 export const getExtractorStatus = createServerFn({ method: "GET" }).handler(async () => ({
   connected: true,
@@ -125,7 +126,73 @@ export const getMediaInfo = createServerFn({ method: "POST" })
       if (ytData) return ytData;
     }
 
-    // 3. Check external microservice if configured
+    // 3. If Instagram, use direct live Polaris extractor
+    if (platform === "instagram") {
+      try {
+        const instaData = await extractInstagram(data.url);
+        if (instaData) {
+          const formats: MediaFormat[] = [];
+          if (instaData.videoVersions && instaData.videoVersions.length > 0) {
+            for (let i = 0; i < instaData.videoVersions.length; i++) {
+              const v = instaData.videoVersions[i];
+              const label = v.height ? `${v.height}p` : i === 0 ? "1080p (HD)" : `${Math.max(480, 1080 - i * 360)}p`;
+              formats.push({
+                id: `insta-${v.height || i}`,
+                kind: "video",
+                label,
+                sizeBytes: 15 * 1024 * 1024,
+                ext: "mp4",
+                directUrl: v.url,
+              });
+            }
+          } else if (instaData.videoUrl) {
+            formats.push({
+              id: "insta-hd",
+              kind: "video",
+              label: "1080p (HD)",
+              sizeBytes: 15 * 1024 * 1024,
+              ext: "mp4",
+              directUrl: instaData.videoUrl,
+            });
+          }
+
+          if (formats.length === 0) {
+            formats.push({
+              id: "insta-1080",
+              kind: "video",
+              label: "1080p",
+              sizeBytes: 15 * 1024 * 1024,
+              ext: "mp4",
+              directUrl: instaData.videoUrl,
+            });
+          }
+
+          formats.push({
+            id: "insta-audio",
+            kind: "audio",
+            label: "Original Audio",
+            sizeBytes: 3 * 1024 * 1024,
+            ext: "mp3",
+            directUrl: instaData.videoUrl,
+          });
+
+          return {
+            url: data.url,
+            platform: "instagram",
+            title: instaData.title,
+            author: instaData.uploader,
+            thumbnail: instaData.thumbnail,
+            durationSec: instaData.duration || 30,
+            formats,
+            demo: false,
+          };
+        }
+      } catch (err) {
+        console.warn("Instagram extractor failed:", err);
+      }
+    }
+
+    // 4. Check external microservice if configured
     const extractorUrl = typeof process !== "undefined" ? process.env?.["EVA_EXTRACTOR_URL"] : undefined;
     if (extractorUrl) {
       try {
