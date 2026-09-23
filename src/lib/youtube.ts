@@ -1,4 +1,17 @@
-import { Innertube, ClientType } from "youtubei.js";
+import { Innertube, ClientType, Platform } from "youtubei.js";
+
+// Enable JavaScript evaluator on Platform shim so signature ciphers can be deciphered
+if (typeof Platform !== "undefined" && Platform?.shim) {
+  try {
+    Platform.shim.eval = (data: any, env: any) => {
+      const code = typeof data === "string" ? data : data?.output || "";
+      const fn = new Function(...Object.keys(env || {}), code);
+      return fn(...Object.values(env || {}));
+    };
+  } catch (e) {
+    console.warn("[Platform.shim.eval] Could not set custom evaluator:", e);
+  }
+}
 
 export interface PoTokenResult {
   poToken: string;
@@ -134,18 +147,18 @@ export async function getInnertube(): Promise<Innertube> {
           ? process.env?.["YOUTUBE_CLIENT_TYPE"]
           : undefined;
 
-      const clientType =
-        clientTypeEnv === "WEB"
-          ? ClientType.WEB
-          : clientTypeEnv === "IOS"
-            ? ClientType.IOS
-            : clientTypeEnv === "TV"
-              ? ClientType.TV
-              : ClientType.ANDROID;
+      const sessionOptions: any = {};
 
-      const sessionOptions: any = {
-        client_type: clientType,
-      };
+      if (clientTypeEnv) {
+        sessionOptions.client_type =
+          clientTypeEnv === "ANDROID"
+            ? ClientType.ANDROID
+            : clientTypeEnv === "IOS"
+              ? ClientType.IOS
+              : clientTypeEnv === "TV"
+                ? ClientType.TV
+                : ClientType.WEB;
+      }
 
       if (pot?.poToken) {
         sessionOptions.po_token = pot.poToken;
@@ -155,7 +168,7 @@ export async function getInnertube(): Promise<Innertube> {
       }
 
       console.log("[YouTube Innertube] Initializing client session:", {
-        client_type: clientType,
+        client_type: sessionOptions.client_type || "DEFAULT (WEB)",
         has_po_token: !!sessionOptions.po_token,
         has_visitor_data: !!sessionOptions.visitor_data,
       });
@@ -239,7 +252,15 @@ export async function extractYouTube(url: string): Promise<YouTubeMedia | null> 
 
     // Progressive combined formats (Video + Audio in single MP4 file)
     for (const f of progFormats) {
-      if (f.url) {
+      let directUrl = f.url;
+      if (!directUrl && typeof f.decipher === "function") {
+        try {
+          directUrl = await f.decipher(yt.session.player);
+        } catch (e) {
+          console.warn("[YouTube Format Decipher Error]", e);
+        }
+      }
+      if (directUrl) {
         const label = f.quality_label || (f.height ? `${f.height}p` : "HD Video");
         if (!seenLabels.has(label)) {
           seenLabels.add(label);
@@ -249,7 +270,7 @@ export async function extractYouTube(url: string): Promise<YouTubeMedia | null> 
             label,
             sizeBytes: Number(f.content_length) || Math.round((durationSec / 60) * 12 * 1024 * 1024),
             ext: "mp4",
-            directUrl: f.url,
+            directUrl,
           });
         }
       }
@@ -258,7 +279,13 @@ export async function extractYouTube(url: string): Promise<YouTubeMedia | null> 
     // Adaptive video formats if no progressive
     if (formats.length === 0) {
       for (const f of adaptiveFormats.filter((a: any) => a?.has_video)) {
-        if (f.url) {
+        let directUrl = f.url;
+        if (!directUrl && typeof f.decipher === "function") {
+          try {
+            directUrl = await f.decipher(yt.session.player);
+          } catch (e) {}
+        }
+        if (directUrl) {
           const label = f.quality_label || (f.height ? `${f.height}p` : "Video");
           if (!seenLabels.has(label)) {
             seenLabels.add(label);
@@ -268,7 +295,7 @@ export async function extractYouTube(url: string): Promise<YouTubeMedia | null> 
               label,
               sizeBytes: Number(f.content_length) || Math.round((durationSec / 60) * 15 * 1024 * 1024),
               ext: "mp4",
-              directUrl: f.url,
+              directUrl,
             });
           }
           if (formats.length >= 3) break;
@@ -279,17 +306,28 @@ export async function extractYouTube(url: string): Promise<YouTubeMedia | null> 
     // Audio format
     let directAudioUrl: string | undefined;
     const audioFormats = adaptiveFormats.filter((a: any) => a?.has_audio && !a?.has_video);
-    if (audioFormats.length > 0 && audioFormats[0]?.url) {
-      directAudioUrl = audioFormats[0].url;
-      formats.push({
-        id: "yt-audio",
-        kind: "audio",
-        label: "Audio (320 kbps)",
-        sizeBytes: Number(audioFormats[0].content_length) || Math.round((durationSec / 60) * 2 * 1024 * 1024),
-        ext: "mp3",
-        directUrl: audioFormats[0].url,
-      });
-    } else if (formats[0]?.directUrl) {
+    for (const af of audioFormats) {
+      let directUrl = af.url;
+      if (!directUrl && typeof af.decipher === "function") {
+        try {
+          directUrl = await af.decipher(yt.session.player);
+        } catch (e) {}
+      }
+      if (directUrl) {
+        directAudioUrl = directUrl;
+        formats.push({
+          id: "yt-audio",
+          kind: "audio",
+          label: "Audio (320 kbps)",
+          sizeBytes: Number(af.content_length) || Math.round((durationSec / 60) * 2 * 1024 * 1024),
+          ext: "mp3",
+          directUrl,
+        });
+        break;
+      }
+    }
+
+    if (!directAudioUrl && formats[0]?.directUrl) {
       directAudioUrl = formats[0].directUrl;
       formats.push({
         id: "yt-audio",
