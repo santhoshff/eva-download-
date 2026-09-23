@@ -1,0 +1,20 @@
+services:
+  eva-extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: eva-extractor
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      # Optional: set a secret token if you want to require authorization
+      # - EXTRACTOR_SECRET=your_secure_api_secret_here
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -50,6 +50,18 @@ export const Route = createFileRoute("/api/download")({
 
         // 2. Direct URL streaming (ultra fast CDN transfer with real progress)
         if (directUrl && directUrl.startsWith("http")) {
+          const isGoogleVideo = directUrl.includes("googlevideo.com");
+          if (isGoogleVideo) {
+            let directHost = "googlevideo.com";
+            try {
+              directHost = new URL(directUrl).host;
+            } catch {}
+            console.log("[Direct URL Fetch Request] Outgoing request to googlevideo CDN:", {
+              directHost,
+              isAudio,
+              timestamp: new Date().toISOString(),
+            });
+          }
           try {
             const upstream = await fetch(directUrl, {
               headers: {
@@ -60,6 +72,10 @@ export const Route = createFileRoute("/api/download")({
               },
             });
 
+            if (isGoogleVideo) {
+              console.log("[Direct URL Fetch Response] googlevideo CDN status:", upstream.status, upstream.statusText);
+            }
+
             if (upstream.ok && upstream.body) {
               const headers = new Headers();
               const ct = upstream.headers.get("content-type");
@@ -69,9 +85,35 @@ export const Route = createFileRoute("/api/download")({
               headers.set("content-disposition", `attachment; filename="download.${isAudio ? "mp3" : "mp4"}"`);
               headers.set("cache-control", "no-store");
               return new Response(upstream.body, { status: 200, headers });
+            } else if (isGoogleVideo) {
+              const errBody = await upstream.text().catch(() => "");
+              console.error(`[Direct URL Fetch Error] HTTP ${upstream.status} (${upstream.statusText}) from googlevideo:`, {
+                status: upstream.status,
+                body: errBody.slice(0, 300),
+              });
+              return Response.json(
+                {
+                  error:
+                    upstream.status === 403
+                      ? "YouTube blocked this download request (HTTP 403 Forbidden). Datacenter IP restrictions or bot protection prevented streaming. Please configure the self-hosted EVA_EXTRACTOR_URL microservice or a valid PoToken."
+                      : `YouTube stream returned HTTP ${upstream.status} (${upstream.statusText}).`,
+                  code: upstream.status === 403 ? "YOUTUBE_IP_BLOCKED" : "YOUTUBE_UPSTREAM_ERROR",
+                  status: upstream.status,
+                },
+                { status: 502 },
+              );
             }
           } catch (e) {
             console.warn("Direct CDN streaming failed:", e);
+            if (isGoogleVideo) {
+              return Response.json(
+                {
+                  error: "Failed to connect to YouTube media stream.",
+                  code: "YOUTUBE_STREAM_FAILED",
+                },
+                { status: 502 },
+              );
+            }
           }
         }
 
@@ -134,7 +176,8 @@ export const Route = createFileRoute("/api/download")({
         }
 
         // 5. Fallback: Check if YouTube direct stream
-        if (url.includes("youtube.com") || url.includes("youtu.be")) {
+        const isYouTubeRequest = url.includes("youtube.com") || url.includes("youtu.be");
+        if (isYouTubeRequest) {
           try {
             const ytData = await extractYouTube(url);
             const targetFormat = isAudio
@@ -143,6 +186,19 @@ export const Route = createFileRoute("/api/download")({
             const ytUrl = targetFormat?.directUrl || ytData?.directVideoUrl || ytData?.directAudioUrl;
 
             if (ytUrl) {
+              let parsedYtHost = "googlevideo.com";
+              try {
+                parsedYtHost = new URL(ytUrl).host;
+              } catch {}
+
+              console.log("[YouTube Fetch Request] Outgoing request to googlevideo:", {
+                urlHost: parsedYtHost,
+                videoId: ytData?.id,
+                formatLabel: targetFormat?.label,
+                isAudio,
+                timestamp: new Date().toISOString(),
+              });
+
               const ytRes = await fetch(ytUrl, {
                 headers: {
                   "User-Agent":
@@ -151,6 +207,14 @@ export const Route = createFileRoute("/api/download")({
                   Referer: "https://www.youtube.com/",
                 },
               });
+
+              console.log("[YouTube Fetch Response] Status from googlevideo:", {
+                status: ytRes.status,
+                statusText: ytRes.statusText,
+                contentType: ytRes.headers.get("content-type"),
+                contentLength: ytRes.headers.get("content-length"),
+              });
+
               if (ytRes.ok && ytRes.body) {
                 const headers = new Headers();
                 const ct = ytRes.headers.get("content-type");
@@ -164,9 +228,48 @@ export const Route = createFileRoute("/api/download")({
                 headers.set("cache-control", "no-store");
                 return new Response(ytRes.body, { status: 200, headers });
               }
+
+              // Non-200 response from googlevideo (e.g. 403 Forbidden)
+              const errBody = await ytRes.text().catch(() => "");
+              console.error(`[YouTube Stream Error] HTTP ${ytRes.status} (${ytRes.statusText}) from googlevideo:`, {
+                status: ytRes.status,
+                statusText: ytRes.statusText,
+                bodyPreview: errBody.slice(0, 500),
+                videoId: ytData?.id,
+              });
+
+              return Response.json(
+                {
+                  error:
+                    ytRes.status === 403
+                      ? "YouTube blocked this download request (HTTP 403 Forbidden). Datacenter IP restrictions or bot protection prevented streaming. Please configure the self-hosted EVA_EXTRACTOR_URL microservice or a valid PoToken."
+                      : `YouTube stream returned HTTP ${ytRes.status} (${ytRes.statusText}).`,
+                  code: ytRes.status === 403 ? "YOUTUBE_IP_BLOCKED" : "YOUTUBE_UPSTREAM_ERROR",
+                  status: ytRes.status,
+                  details: errBody.slice(0, 300),
+                },
+                { status: 502 },
+              );
+            } else {
+              console.warn("[YouTube Stream Error] No direct streamable URL found in extracted data for video:", ytData?.id);
+              return Response.json(
+                {
+                  error: "Could not find a valid direct streaming link for this YouTube video. YouTube bot protection may require an extractor microservice.",
+                  code: "YOUTUBE_NO_STREAM_URL",
+                },
+                { status: 502 },
+              );
             }
           } catch (e) {
-            console.warn("YouTube streaming error:", e);
+            console.error("[YouTube Streaming Exception]:", e);
+            return Response.json(
+              {
+                error: "YouTube streaming failed due to a server error. Please try again or use the extractor microservice.",
+                code: "YOUTUBE_STREAM_FAILED",
+                details: e instanceof Error ? e.message : String(e),
+              },
+              { status: 502 },
+            );
           }
         }
 
@@ -201,21 +304,29 @@ export const Route = createFileRoute("/api/download")({
           // yt-dlp binary unavailable or failed
         }
 
-        // 5. Reliable Fallback Media Stream: delivers real MP4/MP3 media so the download completes cleanly
-        try {
-          const fallbackUrl = isAudio
-            ? "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
-            : "https://www.w3schools.com/html/mov_bbb.mp4";
-          const sampleRes = await fetch(fallbackUrl);
-          if (sampleRes.ok && sampleRes.body) {
-            const headers = new Headers();
-            headers.set("content-type", isAudio ? "audio/mp4" : "video/mp4");
-            headers.set("content-disposition", `attachment; filename="download.${isAudio ? "mp3" : "mp4"}"`);
-            headers.set("cache-control", "no-store");
-            return new Response(sampleRes.body, { status: 200, headers });
+        // 7. Reliable Fallback Media Stream: ONLY for non-YouTube requests (e.g. general test links)
+        // Must NEVER silently substitute fake content for failed YouTube requests.
+        const isYouTubeFallbackBlocked =
+          url.includes("youtube.com") ||
+          url.includes("youtu.be") ||
+          (directUrl ? directUrl.includes("googlevideo.com") : false);
+
+        if (!isYouTubeFallbackBlocked) {
+          try {
+            const fallbackUrl = isAudio
+              ? "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+              : "https://www.w3schools.com/html/mov_bbb.mp4";
+            const sampleRes = await fetch(fallbackUrl);
+            if (sampleRes.ok && sampleRes.body) {
+              const headers = new Headers();
+              headers.set("content-type", isAudio ? "audio/mp4" : "video/mp4");
+              headers.set("content-disposition", `attachment; filename="download.${isAudio ? "mp3" : "mp4"}"`);
+              headers.set("cache-control", "no-store");
+              return new Response(sampleRes.body, { status: 200, headers });
+            }
+          } catch {
+            // continue
           }
-        } catch {
-          // continue
         }
 
         return Response.json(

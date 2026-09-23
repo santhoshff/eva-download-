@@ -1,0 +1,23 @@
+[Unit]
+Description=Eva Extractor Microservice (yt-dlp streaming bridge)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/eva-extractor
+ExecStart=/usr/bin/node /opt/eva-extractor/server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=eva-extractor
+
+# Environment variables
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOST=0.0.0.0
+# Environment=EXTRACTOR_SECRET=your_optional_secret_here
+
+[Install]
+WantedBy=multi-user.target

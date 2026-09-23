@@ -1,0 +1,26 @@
+{
+  "name": "eva-extractor",
+  "version": "1.0.0",
+  "description": "Standalone yt-dlp streaming extractor microservice for Eva Download",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "yt-dlp",
+    "extractor",
+    "video-downloader",
+    "stream"
+  ],
+  "author": "",
+  "license": "MIT"
+}
