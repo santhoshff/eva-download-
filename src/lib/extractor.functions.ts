@@ -114,6 +114,7 @@ export const getMediaInfo = createServerFn({ method: "POST" })
           if (instaData.videoVersions && instaData.videoVersions.length > 0) {
             for (let i = 0; i < instaData.videoVersions.length; i++) {
               const v = instaData.videoVersions[i];
+              if (!v) continue;
               const label = v.height ? `${v.height}p` : i === 0 ? "1080p (HD)" : `${Math.max(480, 1080 - i * 360)}p`;
               formats.push({
                 id: `insta-${v.height || i}`,

@@ -71,6 +71,11 @@ export const Route = createFileRoute("/api/download")({
             if (!isGoogleVideo) {
               streamHeaders["Referer"] = url;
             }
+            const reqRange = request.headers.get("range");
+            if (reqRange) {
+              streamHeaders["Range"] = reqRange;
+            }
+
             const upstream = await fetch(directUrl, {
               headers: streamHeaders,
             });
@@ -83,40 +88,19 @@ export const Route = createFileRoute("/api/download")({
               const headers = new Headers();
               const ct = upstream.headers.get("content-type");
               const cl = upstream.headers.get("content-length");
+              const cr = upstream.headers.get("content-range");
               if (ct) headers.set("content-type", ct);
               if (cl) headers.set("content-length", cl);
-              headers.set("content-disposition", `attachment; filename="download.${isAudio ? "mp3" : "mp4"}"`);
+              if (cr) headers.set("content-range", cr);
+              const ext = isAudio ? (ct?.includes("audio/mp4") ? "m4a" : "mp3") : "mp4";
+              headers.set("content-disposition", `attachment; filename="download.${ext}"`);
               headers.set("cache-control", "no-store");
-              return new Response(upstream.body, { status: 200, headers });
-            } else if (isGoogleVideo) {
-              const errBody = await upstream.text().catch(() => "");
-              console.error(`[Direct URL Fetch Error] HTTP ${upstream.status} (${upstream.statusText}) from googlevideo:`, {
-                status: upstream.status,
-                body: errBody.slice(0, 300),
-              });
-              return Response.json(
-                {
-                  error:
-                    upstream.status === 403
-                      ? "YouTube blocked this download request (HTTP 403 Forbidden). Datacenter IP restrictions or bot protection prevented streaming. Please configure the self-hosted EVA_EXTRACTOR_URL microservice or a valid PoToken."
-                      : `YouTube stream returned HTTP ${upstream.status} (${upstream.statusText}).`,
-                  code: upstream.status === 403 ? "YOUTUBE_IP_BLOCKED" : "YOUTUBE_UPSTREAM_ERROR",
-                  status: upstream.status,
-                },
-                { status: 502 },
-              );
+              return new Response(upstream.body, { status: upstream.status, headers });
+            } else {
+              console.warn(`[Direct URL Fetch Non-OK] HTTP ${upstream.status} (${upstream.statusText}), falling through to live extractor...`);
             }
           } catch (e) {
-            console.warn("Direct CDN streaming failed:", e);
-            if (isGoogleVideo) {
-              return Response.json(
-                {
-                  error: "Failed to connect to YouTube media stream.",
-                  code: "YOUTUBE_STREAM_FAILED",
-                },
-                { status: 502 },
-              );
-            }
+            console.warn("Direct CDN streaming failed, falling through to live extractor:", e);
           }
         }
 
@@ -183,10 +167,12 @@ export const Route = createFileRoute("/api/download")({
         if (isYouTubeRequest) {
           try {
             const ytData = await extractYouTube(url);
-            const targetFormat = isAudio
-              ? ytData?.formats.find((f) => f.kind === "audio") || ytData?.formats[0]
-              : ytData?.formats.find((f) => f.kind === "video") || ytData?.formats[0];
-            const ytUrl = targetFormat?.directUrl || ytData?.directVideoUrl || ytData?.directAudioUrl;
+            const targetFormat =
+              ytData?.formats.find((f) => f.id === format) ||
+              (isAudio
+                ? ytData?.formats.find((f) => f.kind === "audio") || ytData?.formats[0]
+                : ytData?.formats.find((f) => f.kind === "video") || ytData?.formats[0]);
+            const ytUrl = targetFormat?.directUrl || (isAudio ? ytData?.directAudioUrl : ytData?.directVideoUrl);
 
             if (ytUrl) {
               let parsedYtHost = "googlevideo.com";
@@ -202,12 +188,18 @@ export const Route = createFileRoute("/api/download")({
                 timestamp: new Date().toISOString(),
               });
 
+              const ytHeaders: Record<string, string> = {
+                "User-Agent":
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                Accept: "*/*",
+              };
+              const reqRange = request.headers.get("range");
+              if (reqRange) {
+                ytHeaders["Range"] = reqRange;
+              }
+
               const ytRes = await fetch(ytUrl, {
-                headers: {
-                  "User-Agent":
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                  Accept: "*/*",
-                },
+                headers: ytHeaders,
               });
 
               console.log("[YouTube Fetch Response] Status from googlevideo:", {
@@ -221,14 +213,17 @@ export const Route = createFileRoute("/api/download")({
                 const headers = new Headers();
                 const ct = ytRes.headers.get("content-type");
                 const cl = ytRes.headers.get("content-length");
+                const cr = ytRes.headers.get("content-range");
                 if (ct) headers.set("content-type", ct);
                 if (cl) headers.set("content-length", cl);
+                if (cr) headers.set("content-range", cr);
+                const ext = isAudio ? (ct?.includes("audio/mp4") ? "m4a" : "mp3") : "mp4";
                 headers.set(
                   "content-disposition",
-                  `attachment; filename="${ytData?.id || "video"}.${isAudio ? "mp3" : "mp4"}"`,
+                  `attachment; filename="${ytData?.id || "video"}.${ext}"`,
                 );
                 headers.set("cache-control", "no-store");
-                return new Response(ytRes.body, { status: 200, headers });
+                return new Response(ytRes.body, { status: ytRes.status, headers });
               }
 
               // Non-200 response from googlevideo (e.g. 403 Forbidden)

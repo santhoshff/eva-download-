@@ -1,6 +1,7 @@
 import { Innertube, ClientType, Platform } from "youtubei.js";
+import { spawn } from "node:child_process";
 
-// Enable JavaScript evaluator on Platform shim so signature ciphers can be deciphered
+// Enable JavaScript evaluator on Platform shim so signature ciphers can be deciphered if needed
 if (typeof Platform !== "undefined" && Platform?.shim) {
   try {
     Platform.shim.eval = (data: any, env: any) => {
@@ -18,22 +19,14 @@ export interface PoTokenResult {
   visitorData?: string | undefined;
 }
 
-// In-memory cache for PoToken to avoid expensive regeneration
+// In-memory cache for PoToken
 let cachedPoToken: { data: PoTokenResult; expiresAt: number } | null = null;
 
-/**
- * Resolves a Proof-of-Origin (PoToken) and visitor data from:
- * 1. Environment variables (YOUTUBE_PO_TOKEN / YT_PO_TOKEN)
- * 2. Remote PoToken provider service (POT_PROVIDER_URL / PO_TOKEN_SERVER_URL)
- * 3. Dynamic bgutils-js integration if installed
- */
 export async function resolvePoToken(): Promise<PoTokenResult | null> {
-  // Check in-memory cache first (valid for 6 hours)
   if (cachedPoToken && cachedPoToken.expiresAt > Date.now()) {
     return cachedPoToken.data;
   }
 
-  // 1. Static tokens from environment variables
   const envPoToken =
     typeof process !== "undefined"
       ? process.env?.["YOUTUBE_PO_TOKEN"] || process.env?.["YT_PO_TOKEN"]
@@ -49,11 +42,9 @@ export async function resolvePoToken(): Promise<PoTokenResult | null> {
       visitorData: envVisitorData?.trim(),
     };
     cachedPoToken = { data: result, expiresAt: Date.now() + 6 * 3600 * 1000 };
-    console.log("[PoToken] Loaded static PoToken from environment variables");
     return result;
   }
 
-  // 2. Query remote PoToken provider service if configured
   const potProviderUrl =
     typeof process !== "undefined"
       ? process.env?.["POT_PROVIDER_URL"] || process.env?.["PO_TOKEN_SERVER_URL"]
@@ -61,7 +52,6 @@ export async function resolvePoToken(): Promise<PoTokenResult | null> {
 
   if (potProviderUrl) {
     try {
-      console.log(`[PoToken] Fetching token from provider: ${potProviderUrl}`);
       const res = await fetch(potProviderUrl, {
         signal: AbortSignal.timeout(5000),
         headers: { Accept: "application/json" },
@@ -73,132 +63,82 @@ export async function resolvePoToken(): Promise<PoTokenResult | null> {
         if (poToken) {
           const result: PoTokenResult = { poToken, visitorData };
           cachedPoToken = { data: result, expiresAt: Date.now() + 6 * 3600 * 1000 };
-          console.log("[PoToken] Successfully obtained token from remote provider");
           return result;
         }
-      } else {
-        console.warn(`[PoToken] Remote provider returned HTTP ${res.status}`);
       }
     } catch (err) {
       console.warn("[PoToken] Failed to reach remote PoToken provider:", err);
     }
   }
 
-  // 3. Dynamic bgutils-js generator (optional module for VPS / self-hosted environments)
-  try {
-    // @ts-ignore
-    const bgUtils = (await import(/* @vite-ignore */ "bgutils-js").catch(() => null)) as any;
-    if (bgUtils?.BG) {
-      console.log("[PoToken] Generating token via local bgutils-js");
-      // @ts-ignore
-      const JSDOM = (await import(/* @vite-ignore */ "jsdom").catch(() => null)) as any;
-      if (JSDOM?.JSDOM) {
-        const dom = new JSDOM.JSDOM();
-        Object.assign(globalThis, { window: dom.window, document: dom.window.document });
-      }
-
-      const tempYt = await Innertube.create({ retrieve_player: false });
-      const visitorData = tempYt.session.context.client.visitorData;
-      const requestKey = "O43z0dpjhgX20SCx4KAo";
-
-      const bgConfig = {
-        fetch,
-        globalObj: globalThis,
-        identifier: visitorData,
-        requestKey,
-      };
-
-      const bgChallenge = await bgUtils.BG.Challenge.create(bgConfig);
-      if (bgChallenge?.interpreterJavascript) {
-        new Function(bgChallenge.interpreterJavascript.privateDoNotAccessOrElseSafeScriptWrappedValue)();
-      }
-
-      const poResult = await bgUtils.BG.PoToken.generate({
-        program: bgChallenge.program,
-        globalName: bgChallenge.globalName,
-        bgConfig,
-      });
-
-      if (poResult?.poToken) {
-        const result: PoTokenResult = { poToken: poResult.poToken, visitorData };
-        cachedPoToken = { data: result, expiresAt: Date.now() + 6 * 3600 * 1000 };
-        console.log("[PoToken] Generated PoToken successfully via bgutils-js");
-        return result;
-      }
-    }
-  } catch (err) {
-    console.warn("[PoToken] Dynamic bgutils-js generation failed or unsupported:", err);
-  }
-
   return null;
 }
 
-let innertubeInstance: Innertube | null = null;
-let innertubePromise: Promise<Innertube> | null = null;
+// Cached Innertube clients for Android (progressive video with sound) and iOS (HQ audio & HD video)
+let androidClientInstance: Innertube | null = null;
+let androidClientPromise: Promise<Innertube> | null = null;
+
+let iosClientInstance: Innertube | null = null;
+let iosClientPromise: Promise<Innertube> | null = null;
+
+export async function getAndroidInnertube(): Promise<Innertube> {
+  if (androidClientInstance) return androidClientInstance;
+  if (!androidClientPromise) {
+    androidClientPromise = Innertube.create({ client_type: ClientType.ANDROID })
+      .then((yt) => {
+        androidClientInstance = yt;
+        return yt;
+      })
+      .catch((err) => {
+        androidClientPromise = null;
+        console.error("[YouTube Android Innertube Error]:", err);
+        throw err;
+      });
+  }
+  return androidClientPromise;
+}
+
+export async function getIOSInnertube(): Promise<Innertube> {
+  if (iosClientInstance) return iosClientInstance;
+  if (!iosClientPromise) {
+    iosClientPromise = Innertube.create({ client_type: ClientType.IOS })
+      .then((yt) => {
+        iosClientInstance = yt;
+        return yt;
+      })
+      .catch((err) => {
+        iosClientPromise = null;
+        console.error("[YouTube iOS Innertube Error]:", err);
+        throw err;
+      });
+  }
+  return iosClientPromise;
+}
 
 export async function getInnertube(): Promise<Innertube> {
-  if (innertubeInstance) return innertubeInstance;
-  if (!innertubePromise) {
-    innertubePromise = (async () => {
-      const pot = await resolvePoToken().catch(() => null);
-
-      const clientTypeEnv =
-        typeof process !== "undefined"
-          ? process.env?.["YOUTUBE_CLIENT_TYPE"]
-          : undefined;
-
-      const sessionOptions: any = {};
-
-      if (clientTypeEnv) {
-        sessionOptions.client_type =
-          clientTypeEnv === "ANDROID"
-            ? ClientType.ANDROID
-            : clientTypeEnv === "IOS"
-              ? ClientType.IOS
-              : clientTypeEnv === "TV"
-                ? ClientType.TV
-                : ClientType.WEB;
-      }
-
-      if (pot?.poToken) {
-        sessionOptions.po_token = pot.poToken;
-        if (pot.visitorData) {
-          sessionOptions.visitor_data = pot.visitorData;
-        }
-      }
-
-      console.log("[YouTube Innertube] Initializing client session:", {
-        client_type: sessionOptions.client_type || "DEFAULT (WEB)",
-        has_po_token: !!sessionOptions.po_token,
-        has_visitor_data: !!sessionOptions.visitor_data,
-      });
-
-      const yt = await Innertube.create(sessionOptions);
-      innertubeInstance = yt;
-      return yt;
-    })().catch((err) => {
-      innertubePromise = null;
-      console.error("[YouTube Innertube] Failed to create Innertube instance:", err);
-      throw err;
-    });
-  }
-  return innertubePromise;
+  return getAndroidInnertube();
 }
 
 export function extractYouTubeId(url: string): string | null {
   try {
     const parsed = new URL(url);
     if (parsed.hostname.includes("youtu.be")) {
-      return parsed.pathname.slice(1).split("?")[0] || null;
+      return parsed.pathname.slice(1).split("?")[0]?.split("/")[0] || null;
     }
     if (parsed.pathname.includes("/shorts/")) {
-      return parsed.pathname.split("/shorts/")[1]?.split("?")[0] || null;
+      return parsed.pathname.split("/shorts/")[1]?.split("?")[0]?.split("/")[0] || null;
+    }
+    if (parsed.pathname.includes("/embed/")) {
+      return parsed.pathname.split("/embed/")[1]?.split("?")[0]?.split("/")[0] || null;
+    }
+    if (parsed.pathname.includes("/live/")) {
+      return parsed.pathname.split("/live/")[1]?.split("?")[0]?.split("/")[0] || null;
     }
     if (parsed.searchParams.has("v")) {
       return parsed.searchParams.get("v");
     }
   } catch {}
-  const match = url.match(/(?:youtu\.be\/|watch\?v=|shorts\/)([a-zA-Z0-9_-]{11})/i);
+  const match = url.match(/(?:youtu\.be\/|watch\?v=|shorts\/|embed\/|live\/)([a-zA-Z0-9_-]{11})/i);
   return match && match[1] ? match[1] : null;
 }
 
@@ -222,6 +162,104 @@ export interface YouTubeMedia {
   directAudioUrl?: string | undefined;
 }
 
+/**
+ * Fallback to python yt-dlp if installed on the host
+ */
+async function extractViaLocalYtDlp(url: string, videoId: string): Promise<YouTubeMedia | null> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn("python", [
+        "-m",
+        "yt_dlp",
+        "--js-runtimes",
+        "node:node",
+        "--dump-json",
+        "--no-playlist",
+        "--no-warnings",
+        url,
+      ]);
+
+      let stdout = "";
+      child.stdout.on("data", (c) => {
+        stdout += c.toString();
+      });
+
+      child.on("close", (code) => {
+        if (code !== 0 || !stdout) {
+          return resolve(null);
+        }
+        try {
+          const raw = JSON.parse(stdout);
+          const title = raw.title || "YouTube Video";
+          const author = raw.uploader || raw.channel || "YouTube Creator";
+          const durationSec = Math.round(Number(raw.duration) || 180);
+          const thumbnail =
+            raw.thumbnail ||
+            (Array.isArray(raw.thumbnails) && raw.thumbnails[raw.thumbnails.length - 1]?.url) ||
+            `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+          const rawFormats: any[] = Array.isArray(raw.formats) ? raw.formats : [];
+          const formats: YouTubeFormat[] = [];
+          const seen = new Set<string>();
+
+          // Progressive formats first
+          for (const f of rawFormats.filter((f) => f.vcodec && f.vcodec !== "none" && f.acodec && f.acodec !== "none" && f.url)) {
+            const h = f.height || 360;
+            const label = `${h}p (MP4 Video)`;
+            if (!seen.has(label)) {
+              seen.add(label);
+              formats.push({
+                id: `yt-ytdlp-${f.format_id}`,
+                kind: "video",
+                label,
+                sizeBytes: f.filesize || f.filesize_approx,
+                ext: "mp4",
+                directUrl: f.url,
+              });
+            }
+          }
+
+          // Audio formats
+          for (const f of rawFormats.filter((f) => (!f.vcodec || f.vcodec === "none") && f.url)) {
+            const label = "HQ Audio (M4A · 128 kbps)";
+            if (!seen.has("audio")) {
+              seen.add("audio");
+              formats.push({
+                id: `yt-ytdlp-audio-${f.format_id}`,
+                kind: "audio",
+                label,
+                sizeBytes: f.filesize || f.filesize_approx,
+                ext: "m4a",
+                directUrl: f.url,
+              });
+            }
+          }
+
+          if (formats.length > 0) {
+            return resolve({
+              id: videoId,
+              title,
+              author,
+              thumbnail,
+              durationSec,
+              formats,
+              directVideoUrl: formats.find((f) => f.kind === "video")?.directUrl,
+              directAudioUrl: formats.find((f) => f.kind === "audio")?.directUrl,
+            });
+          }
+        } catch {
+          // ignore parse error
+        }
+        resolve(null);
+      });
+
+      child.on("error", () => resolve(null));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 export async function extractYouTube(url: string): Promise<YouTubeMedia | null> {
   const videoId = extractYouTubeId(url);
   if (!videoId) {
@@ -229,138 +267,147 @@ export async function extractYouTube(url: string): Promise<YouTubeMedia | null> 
     return null;
   }
 
-  // 1. Try Innertube Client
+  // 1. Primary: Dual-Client Innertube Extraction (Android for progressive video with sound, iOS for HQ Audio and HD video)
   try {
-    const yt = await getInnertube();
-    console.log(`[YouTube Extraction] Requesting basic info for ${videoId}...`);
-    const basic = await yt.getBasicInfo(videoId);
+    const [androidYt, iosYt] = await Promise.all([
+      getAndroidInnertube().catch((e) => {
+        console.warn("[YouTube Android Client Init Error]:", e);
+        return null;
+      }),
+      getIOSInnertube().catch((e) => {
+        console.warn("[YouTube iOS Client Init Error]:", e);
+        return null;
+      }),
+    ]);
 
-    const title = basic.basic_info?.title || "YouTube Video";
-    const author = basic.basic_info?.author || "YouTube Channel";
-    const durationSec = Number(basic.basic_info?.duration) || 180;
+    const [androidInfo, iosInfo] = await Promise.all([
+      androidYt ? androidYt.getBasicInfo(videoId).catch((e) => {
+        console.warn("[YouTube Android getBasicInfo Error]:", e?.message || e);
+        return null;
+      }) : null,
+      iosYt ? iosYt.getBasicInfo(videoId).catch((e) => {
+        console.warn("[YouTube iOS getBasicInfo Error]:", e?.message || e);
+        return null;
+      }) : null,
+    ]);
 
-    const thumbs = basic.basic_info?.thumbnail || [];
-    const thumbnail =
-      thumbs[thumbs.length - 1]?.url ||
-      `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    if (androidInfo || iosInfo) {
+      const basic = androidInfo?.basic_info || iosInfo?.basic_info;
+      const title = basic?.title || "YouTube Video";
+      const author = basic?.author || "YouTube Creator";
+      const durationSec = Number(basic?.duration) || 180;
 
-    const formats: YouTubeFormat[] = [];
-    const seenLabels = new Set<string>();
+      const thumbs = basic?.thumbnail || [];
+      const thumbnail =
+        thumbs[thumbs.length - 1]?.url ||
+        `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
-    const progFormats = basic.streaming_data?.formats || [];
-    const adaptiveFormats = basic.streaming_data?.adaptive_formats || [];
+      const formats: YouTubeFormat[] = [];
+      const seenLabels = new Set<string>();
 
-    // Progressive combined formats (Video + Audio in single MP4 file)
-    for (const f of progFormats) {
-      let directUrl = f.url;
-      if (!directUrl && typeof f.decipher === "function") {
-        try {
-          directUrl = await f.decipher(yt.session.player);
-        } catch (e) {
-          console.warn("[YouTube Format Decipher Error]", e);
-        }
-      }
-      if (directUrl) {
-        const label = f.quality_label || (f.height ? `${f.height}p` : "HD Video");
-        if (!seenLabels.has(label)) {
+      // A. Progressive video formats from Android (contain BOTH video and audio in single MP4)
+      const androidProg = androidInfo?.streaming_data?.formats || [];
+      for (const f of androidProg) {
+        if (f.url) {
+          const height = f.height || (f.quality_label ? parseInt(f.quality_label, 10) : 360);
+          const label = f.quality_label || `${height}p`;
+          const displayLabel = `${label} (MP4 Video)`;
           seenLabels.add(label);
           formats.push({
-            id: `yt-${f.itag || label}`,
+            id: `yt-prog-${f.itag || label}`,
             kind: "video",
-            label,
+            label: displayLabel,
             sizeBytes: Number(f.content_length) || Math.round((durationSec / 60) * 12 * 1024 * 1024),
             ext: "mp4",
-            directUrl,
+            directUrl: f.url,
           });
         }
       }
-    }
 
-    // Adaptive video formats if no progressive
-    if (formats.length === 0) {
-      for (const f of adaptiveFormats.filter((a: any) => a?.has_video)) {
-        let directUrl = f.url;
-        if (!directUrl && typeof f.decipher === "function") {
-          try {
-            directUrl = await f.decipher(yt.session.player);
-          } catch (e) {}
-        }
-        if (directUrl) {
-          const label = f.quality_label || (f.height ? `${f.height}p` : "Video");
-          if (!seenLabels.has(label)) {
+      // B. Adaptive HD video formats from iOS (1080p, 720p, etc.)
+      const iosAdaptive = iosInfo?.streaming_data?.adaptive_formats || [];
+      for (const f of iosAdaptive.filter((a: any) => a?.has_video && !a?.has_audio)) {
+        if (f.url) {
+          const height = f.height || (f.quality_label ? parseInt(f.quality_label, 10) : 0);
+          const label = f.quality_label || (height ? `${height}p` : "HD Video");
+          if (!seenLabels.has(label) && (height >= 720 || formats.length === 0)) {
             seenLabels.add(label);
             formats.push({
-              id: `yt-${f.itag || label}`,
+              id: `yt-hd-${f.itag || label}`,
               kind: "video",
-              label,
-              sizeBytes: Number(f.content_length) || Math.round((durationSec / 60) * 15 * 1024 * 1024),
+              label: `${label} (HD Video)`,
+              sizeBytes: Number(f.content_length) || Math.round((durationSec / 60) * 20 * 1024 * 1024),
               ext: "mp4",
-              directUrl,
+              directUrl: f.url,
             });
           }
-          if (formats.length >= 3) break;
         }
       }
-    }
 
-    // Audio format
-    let directAudioUrl: string | undefined;
-    const audioFormats = adaptiveFormats.filter((a: any) => a?.has_audio && !a?.has_video);
-    for (const af of audioFormats) {
-      let directUrl = af.url;
-      if (!directUrl && typeof af.decipher === "function") {
-        try {
-          directUrl = await af.decipher(yt.session.player);
-        } catch (e) {}
+      // C. Audio formats from iOS (clean unblocked AAC direct streams)
+      const iosAudios = iosAdaptive.filter((a: any) => a?.has_audio && !a?.has_video);
+      for (const af of iosAudios) {
+        if (af.url) {
+          const isHigh = (af.bitrate || 0) > 80000;
+          formats.push({
+            id: `yt-audio-${af.itag}`,
+            kind: "audio",
+            label: isHigh ? "HQ Audio (M4A · 128 kbps)" : "Audio (M4A · 48 kbps)",
+            sizeBytes: Number(af.content_length) || Math.round((durationSec / 60) * 1.5 * 1024 * 1024),
+            ext: "m4a",
+            directUrl: af.url,
+          });
+          if (isHigh) break;
+        }
       }
-      if (directUrl) {
-        directAudioUrl = directUrl;
+
+      // D. Fallback audio from progressive stream if no separate audio format was returned
+      const hasAudio = formats.some((f) => f.kind === "audio");
+      if (!hasAudio && formats[0]?.directUrl) {
         formats.push({
-          id: "yt-audio",
+          id: "yt-audio-prog",
           kind: "audio",
-          label: "Audio (320 kbps)",
-          sizeBytes: Number(af.content_length) || Math.round((durationSec / 60) * 2 * 1024 * 1024),
-          ext: "mp3",
-          directUrl,
+          label: "Original Audio (M4A)",
+          sizeBytes: Math.round((durationSec / 60) * 1.5 * 1024 * 1024),
+          ext: "m4a",
+          directUrl: formats[0].directUrl,
         });
-        break;
       }
-    }
 
-    if (!directAudioUrl && formats[0]?.directUrl) {
-      directAudioUrl = formats[0].directUrl;
-      formats.push({
-        id: "yt-audio",
-        kind: "audio",
-        label: "Audio Track",
-        sizeBytes: Math.round((durationSec / 60) * 2 * 1024 * 1024),
-        ext: "mp3",
-        directUrl: formats[0].directUrl,
-      });
-    }
+      const directVideoUrl = formats.find((f) => f.kind === "video")?.directUrl;
+      const directAudioUrl = formats.find((f) => f.kind === "audio")?.directUrl;
 
-    const directVideoUrl = formats.find((f) => f.kind === "video")?.directUrl;
-
-    if (formats.length > 0) {
-      console.log(`[YouTube Extraction] Successfully extracted ${formats.length} formats for ${videoId} (${title})`);
-      return {
-        id: videoId,
-        title,
-        author,
-        thumbnail,
-        durationSec,
-        formats,
-        directVideoUrl,
-        directAudioUrl,
-      };
-    } else {
-      console.warn(`[YouTube Extraction] No streamable format URLs returned by Innertube for ${videoId}`);
+      if (formats.length > 0) {
+        console.log(`[YouTube Extraction] Successfully extracted ${formats.length} formats for ${videoId} ("${title}")`);
+        return {
+          id: videoId,
+          title,
+          author,
+          thumbnail,
+          durationSec,
+          formats,
+          directVideoUrl,
+          directAudioUrl,
+        };
+      }
     }
   } catch (err) {
-    console.error("[YouTube Extraction Error] Innertube getBasicInfo failed:", err);
+    console.error("[YouTube Extraction Error] Innertube combined extraction failed:", err);
   }
 
-  // 2. Fallback: YouTube oEmbed metadata (metadata only, no direct stream)
+  // 2. Secondary fallback: Local python yt-dlp if available
+  try {
+    console.log(`[YouTube Extraction] Trying local yt-dlp fallback for ${videoId}...`);
+    const ytdlpResult = await extractViaLocalYtDlp(url, videoId);
+    if (ytdlpResult && ytdlpResult.formats.length > 0) {
+      console.log(`[YouTube Extraction] Local yt-dlp fallback succeeded for ${videoId}`);
+      return ytdlpResult;
+    }
+  } catch (err) {
+    console.warn("[YouTube Extraction Error] yt-dlp fallback error:", err);
+  }
+
+  // 3. Fallback: YouTube oEmbed metadata (metadata only)
   try {
     console.log(`[YouTube Extraction] Trying oEmbed fallback for metadata (${videoId})...`);
     const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
@@ -374,9 +421,8 @@ export async function extractYouTube(url: string): Promise<YouTubeMedia | null> 
         thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
         durationSec: 180,
         formats: [
-          { id: "yt-720p", kind: "video", label: "720p (HD)", sizeBytes: 25 * 1024 * 1024, ext: "mp4" },
-          { id: "yt-360p", kind: "video", label: "360p (SD)", sizeBytes: 12 * 1024 * 1024, ext: "mp4" },
-          { id: "yt-audio", kind: "audio", label: "Original Audio", sizeBytes: 3 * 1024 * 1024, ext: "mp3" },
+          { id: "yt-360p", kind: "video", label: "360p (MP4 Video)", sizeBytes: 15 * 1024 * 1024, ext: "mp4" },
+          { id: "yt-audio", kind: "audio", label: "Original Audio (M4A)", sizeBytes: 3 * 1024 * 1024, ext: "m4a" },
         ],
       };
     }
@@ -386,5 +432,3 @@ export async function extractYouTube(url: string): Promise<YouTubeMedia | null> 
 
   return null;
 }
-
-

@@ -106,7 +106,7 @@ export function mockMediaInfo(url: string): MediaInfo {
     } else if (platform === "youtube") {
       let videoId = "";
       if (parsed.hostname.includes("youtu.be")) {
-        videoId = parsed.pathname.slice(1).split("?")[0];
+        videoId = parsed.pathname.slice(1).split("?")[0] || "";
       } else {
         videoId = parsed.searchParams.get("v") || "";
       }

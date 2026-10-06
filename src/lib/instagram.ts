@@ -12,7 +12,7 @@ export function shortcodeToMediaId(shortcode: string): string {
 
 export function extractShortcode(url: string): string | null {
   const match = url.match(/(?:reel|p|tv|reels)\/([a-zA-Z0-9_-]+)/i);
-  return match ? match[1] : null;
+  return match && match[1] ? match[1] : null;
 }
 
 function extractLsdToken(webpage: string): string | null {
@@ -39,13 +39,13 @@ export interface InstagramMedia {
   title: string;
   uploader: string;
   thumbnail: string;
-  videoUrl?: string;
+  videoUrl?: string | undefined;
   videoVersions: Array<{
     url: string;
     width?: number;
     height?: number;
   }>;
-  duration?: number;
+  duration?: number | undefined;
 }
 
 export async function extractInstagram(url: string): Promise<InstagramMedia | null> {
@@ -219,7 +219,7 @@ export async function extractInstagram(url: string): Promise<InstagramMedia | nu
       // Caption
       const capMatch = html.match(/class="Caption"[^>]*>([\s\S]*?)<\/div>/i);
       let caption = "";
-      if (capMatch) {
+      if (capMatch && capMatch[1]) {
         caption = capMatch[1].replace(/<[^>]+>/g, "").trim();
       }
 
@@ -231,8 +231,8 @@ export async function extractInstagram(url: string): Promise<InstagramMedia | nu
               ? `${caption.slice(0, 80).trim()}...`
               : caption
             : `Instagram Reel (${shortcode})`,
-          uploader: userMatch ? `@${userMatch[1].trim()}` : "@instagram",
-          thumbnail: imgMatch ? imgMatch[1].replace(/&amp;/g, "&") : "",
+          uploader: userMatch && userMatch[1] ? `@${userMatch[1].trim()}` : "@instagram",
+          thumbnail: imgMatch && imgMatch[1] ? imgMatch[1].replace(/&amp;/g, "&") : "",
           videoVersions: [],
         };
       }
