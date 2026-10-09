@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: eva-extractor
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3000

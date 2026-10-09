@@ -176,8 +176,8 @@ function Home() {
       <footer className="mt-10 border-t border-line/10 pt-4">
         <p className="font-mono text-[10px] leading-relaxed text-ink/40">
           {status.data?.connected
-            ? "Extractor connected · saving real files."
-            : "Demo mode · sample data until you connect your own extractor."}{" "}
+            ? "Dedicated extractor connected · saving real files."
+            : "Cloud extractor active · saving real files."}{" "}
           <Link to="/about" className="underline underline-offset-2 hover:text-ink">How it works</Link>
         </p>
       </footer>

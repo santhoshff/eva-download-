@@ -2,7 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import { Readable } from "node:stream";
 import { extractInstagram } from "../../lib/instagram";
-import { extractYouTube } from "../../lib/youtube";
+import {
+  extractYouTube,
+  extractYouTubeId,
+  extractViaPiped,
+  extractViaCobalt,
+} from "../../lib/youtube";
 
 const query = z.object({
   url: z.string().url(),
@@ -68,7 +73,10 @@ export const Route = createFileRoute("/api/download")({
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
               Accept: "*/*",
             };
-            if (!isGoogleVideo) {
+            if (isGoogleVideo) {
+              streamHeaders["Origin"] = "https://www.youtube.com";
+              streamHeaders["Referer"] = "https://www.youtube.com/";
+            } else {
               streamHeaders["Referer"] = url;
             }
             const reqRange = request.headers.get("range");
@@ -167,96 +175,130 @@ export const Route = createFileRoute("/api/download")({
         if (isYouTubeRequest) {
           try {
             const ytData = await extractYouTube(url);
-            const targetFormat =
-              ytData?.formats.find((f) => f.id === format) ||
-              (isAudio
-                ? ytData?.formats.find((f) => f.kind === "audio") || ytData?.formats[0]
-                : ytData?.formats.find((f) => f.kind === "video") || ytData?.formats[0]);
-            const ytUrl = targetFormat?.directUrl || (isAudio ? ytData?.directAudioUrl : ytData?.directVideoUrl);
+            const candidateUrls: string[] = [];
 
-            if (ytUrl) {
-              let parsedYtHost = "googlevideo.com";
-              try {
-                parsedYtHost = new URL(ytUrl).host;
-              } catch {}
+            const targetFormat = ytData?.formats.find((f) => f.id === format);
+            if (targetFormat?.directUrl) candidateUrls.push(targetFormat.directUrl);
 
-              console.log("[YouTube Fetch Request] Outgoing request to googlevideo:", {
-                urlHost: parsedYtHost,
-                videoId: ytData?.id,
-                formatLabel: targetFormat?.label,
-                isAudio,
-                timestamp: new Date().toISOString(),
-              });
-
-              const ytHeaders: Record<string, string> = {
-                "User-Agent":
-                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                Accept: "*/*",
-              };
-              const reqRange = request.headers.get("range");
-              if (reqRange) {
-                ytHeaders["Range"] = reqRange;
-              }
-
-              const ytRes = await fetch(ytUrl, {
-                headers: ytHeaders,
-              });
-
-              console.log("[YouTube Fetch Response] Status from googlevideo:", {
-                status: ytRes.status,
-                statusText: ytRes.statusText,
-                contentType: ytRes.headers.get("content-type"),
-                contentLength: ytRes.headers.get("content-length"),
-              });
-
-              if (ytRes.ok && ytRes.body) {
-                const headers = new Headers();
-                const ct = ytRes.headers.get("content-type");
-                const cl = ytRes.headers.get("content-length");
-                const cr = ytRes.headers.get("content-range");
-                if (ct) headers.set("content-type", ct);
-                if (cl) headers.set("content-length", cl);
-                if (cr) headers.set("content-range", cr);
-                const ext = isAudio ? (ct?.includes("audio/mp4") ? "m4a" : "mp3") : "mp4";
-                headers.set(
-                  "content-disposition",
-                  `attachment; filename="${ytData?.id || "video"}.${ext}"`,
-                );
-                headers.set("cache-control", "no-store");
-                return new Response(ytRes.body, { status: ytRes.status, headers });
-              }
-
-              // Non-200 response from googlevideo (e.g. 403 Forbidden)
-              const errBody = await ytRes.text().catch(() => "");
-              console.error(`[YouTube Stream Error] HTTP ${ytRes.status} (${ytRes.statusText}) from googlevideo:`, {
-                status: ytRes.status,
-                statusText: ytRes.statusText,
-                bodyPreview: errBody.slice(0, 500),
-                videoId: ytData?.id,
-              });
-
-              return Response.json(
-                {
-                  error:
-                    ytRes.status === 403
-                      ? "YouTube blocked this download request (HTTP 403 Forbidden). Datacenter IP restrictions or bot protection prevented streaming. Please configure the self-hosted EVA_EXTRACTOR_URL microservice or a valid PoToken."
-                      : `YouTube stream returned HTTP ${ytRes.status} (${ytRes.statusText}).`,
-                  code: ytRes.status === 403 ? "YOUTUBE_IP_BLOCKED" : "YOUTUBE_UPSTREAM_ERROR",
-                  status: ytRes.status,
-                  details: errBody.slice(0, 300),
-                },
-                { status: 502 },
-              );
-            } else {
-              console.warn("[YouTube Stream Error] No direct streamable URL found in extracted data for video:", ytData?.id);
-              return Response.json(
-                {
-                  error: "Could not find a valid direct streaming link for this YouTube video. YouTube bot protection may require an extractor microservice.",
-                  code: "YOUTUBE_NO_STREAM_URL",
-                },
-                { status: 502 },
-              );
+            const directFallback = isAudio ? ytData?.directAudioUrl : ytData?.directVideoUrl;
+            if (directFallback && !candidateUrls.includes(directFallback)) {
+              candidateUrls.push(directFallback);
             }
+
+            // Other matching formats
+            for (const f of (ytData?.formats || []).filter((f) => (isAudio ? f.kind === "audio" : f.kind === "video"))) {
+              if (f.directUrl && !candidateUrls.includes(f.directUrl)) {
+                candidateUrls.push(f.directUrl);
+              }
+            }
+
+            // Any remaining formats
+            for (const f of ytData?.formats || []) {
+              if (f.directUrl && !candidateUrls.includes(f.directUrl)) {
+                candidateUrls.push(f.directUrl);
+              }
+            }
+
+            // Try streaming each candidate URL
+            for (const ytUrl of candidateUrls) {
+              try {
+                const isGv = ytUrl.includes("googlevideo.com");
+                const ytHeaders: Record<string, string> = {
+                  "User-Agent":
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  Accept: "*/*",
+                };
+                if (isGv) {
+                  ytHeaders["Origin"] = "https://www.youtube.com";
+                  ytHeaders["Referer"] = "https://www.youtube.com/";
+                }
+                const reqRange = request.headers.get("range");
+                if (reqRange) {
+                  ytHeaders["Range"] = reqRange;
+                }
+
+                const ytRes = await fetch(ytUrl, { headers: ytHeaders });
+                if (ytRes.ok && ytRes.body) {
+                  const headers = new Headers();
+                  const ct = ytRes.headers.get("content-type");
+                  const cl = ytRes.headers.get("content-length");
+                  const cr = ytRes.headers.get("content-range");
+                  if (ct) headers.set("content-type", ct);
+                  if (cl) headers.set("content-length", cl);
+                  if (cr) headers.set("content-range", cr);
+                  const ext = isAudio ? (ct?.includes("audio/mp4") ? "m4a" : "mp3") : "mp4";
+                  headers.set(
+                    "content-disposition",
+                    `attachment; filename="${ytData?.id || "video"}.${ext}"`,
+                  );
+                  headers.set("cache-control", "no-store");
+                  return new Response(ytRes.body, { status: ytRes.status, headers });
+                }
+              } catch {
+                // continue to next candidate
+              }
+            }
+
+            // If all candidate URLs failed (or none were found), try Piped and Cobalt directly
+            const videoId = ytData?.id || extractYouTubeId(url);
+            if (videoId) {
+              // Try Piped
+              const piped = await extractViaPiped(videoId).catch(() => null);
+              const pipedUrl = isAudio ? piped?.directAudioUrl : piped?.directVideoUrl || piped?.formats[0]?.directUrl;
+              if (pipedUrl) {
+                try {
+                  const pRes = await fetch(pipedUrl, {
+                    headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*" },
+                  });
+                  if (pRes.ok && pRes.body) {
+                    const headers = new Headers();
+                    const ct = pRes.headers.get("content-type") || (isAudio ? "audio/mp4" : "video/mp4");
+                    const cl = pRes.headers.get("content-length");
+                    if (ct) headers.set("content-type", ct);
+                    if (cl) headers.set("content-length", cl);
+                    headers.set(
+                      "content-disposition",
+                      `attachment; filename="${videoId}.${isAudio ? "m4a" : "mp4"}"`,
+                    );
+                    headers.set("cache-control", "no-store");
+                    return new Response(pRes.body, { status: 200, headers });
+                  }
+                } catch {}
+              }
+
+              // Try Cobalt
+              const cobalt = await extractViaCobalt(url, videoId).catch(() => null);
+              const cobaltUrl = isAudio ? cobalt?.directAudioUrl : cobalt?.directVideoUrl;
+              if (cobaltUrl) {
+                try {
+                  const cRes = await fetch(cobaltUrl, {
+                    headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*" },
+                  });
+                  if (cRes.ok && cRes.body) {
+                    const headers = new Headers();
+                    const ct = cRes.headers.get("content-type") || (isAudio ? "audio/mpeg" : "video/mp4");
+                    const cl = cRes.headers.get("content-length");
+                    if (ct) headers.set("content-type", ct);
+                    if (cl) headers.set("content-length", cl);
+                    headers.set(
+                      "content-disposition",
+                      `attachment; filename="${videoId}.${isAudio ? "mp3" : "mp4"}"`,
+                    );
+                    headers.set("cache-control", "no-store");
+                    return new Response(cRes.body, { status: 200, headers });
+                  }
+                } catch {}
+              }
+            }
+
+            return Response.json(
+              {
+                error:
+                  "Could not find a valid direct streaming link for this YouTube video. YouTube bot protection may require configuring a self-hosted EVA_EXTRACTOR_URL microservice.",
+                code: "YOUTUBE_NO_STREAM_URL",
+              },
+              { status: 502 },
+            );
           } catch (e) {
             console.error("[YouTube Streaming Exception]:", e);
             return Response.json(

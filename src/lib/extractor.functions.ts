@@ -4,9 +4,32 @@ import { detectPlatform, mockMediaInfo, type MediaFormat, type MediaInfo } from 
 import { extractInstagram } from "./instagram";
 import { extractYouTube } from "./youtube";
 
-export const getExtractorStatus = createServerFn({ method: "GET" }).handler(async () => ({
-  connected: true,
-}));
+export const getExtractorStatus = createServerFn({ method: "GET" }).handler(async () => {
+  const extractorUrl = typeof process !== "undefined" ? process.env?.["EVA_EXTRACTOR_URL"] : undefined;
+  if (!extractorUrl) {
+    return {
+      connected: false,
+      dedicated: false,
+      message: "Cloud multi-engine extractor active",
+    };
+  }
+  try {
+    const res = await fetch(`${extractorUrl.replace(/\/$/, "")}/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    return {
+      connected: res.ok,
+      dedicated: true,
+      message: res.ok ? "Dedicated microservice connected" : "Dedicated microservice unreachable",
+    };
+  } catch {
+    return {
+      connected: false,
+      dedicated: true,
+      message: "Dedicated microservice unreachable",
+    };
+  }
+});
 
 async function extractTikTok(url: string): Promise<MediaInfo | null> {
   try {

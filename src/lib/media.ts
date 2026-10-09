@@ -107,12 +107,18 @@ export function mockMediaInfo(url: string): MediaInfo {
       let videoId = "";
       if (parsed.hostname.includes("youtu.be")) {
         videoId = parsed.pathname.slice(1).split("?")[0] || "";
+      } else if (parsed.pathname.includes("/shorts/")) {
+        videoId = parsed.pathname.split("/shorts/")[1]?.split("?")[0]?.split("/")[0] || "";
       } else {
         videoId = parsed.searchParams.get("v") || "";
       }
-      title = videoId ? `YouTube Video (${videoId})` : "YouTube Video";
+      title = videoId
+        ? parsed.pathname.includes("/shorts/")
+          ? `YouTube Short (${videoId})`
+          : `YouTube Video (${videoId})`
+        : "YouTube Video";
       author = "YouTube Channel";
-      durationSec = 240;
+      durationSec = parsed.pathname.includes("/shorts/") ? 45 : 240;
     } else if (platform === "tiktok") {
       const match = url.match(/video\/([0-9]+)/i);
       const id = match ? match[1] : "";
