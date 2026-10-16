@@ -1,0 +1,49 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Create Android wrapper
+        run: |
+          mkdir apkbuild && cd apkbuild
+          npm init -y
+          npm i @capacitor/core @capacitor/cli @capacitor/android
+          mkdir www
+          echo '<html><body>Loading...</body></html>' > www/index.html
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.eva.download",
+            "appName": "Eva Download",
+            "webDir": "www",
+            "server": { "url": "https://eva-download-delta.vercel.app" }
+          }
+          EOF
+          npx cap add android
+
+      - name: Build APK
+        working-directory: apkbuild/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eva-download-apk
+          path: apkbuild/android/app/build/outputs/apk/debug/app-debug.apk
